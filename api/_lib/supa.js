@@ -4,7 +4,7 @@ import { logError } from './observability.js';
 // anon key), so Supabase row-level security and SECURITY DEFINER functions decide what is allowed.
 // No service-role key is used or required.
 const pick = (...names) => names.map(name => (process.env[name] || '').trim()).find(Boolean) || '';
-export const SUPABASE = (pick('SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_URL') || 'https://wpclkhgizbvxuvbhbwzs.supabase.co').replace(/\/+$/, '');
+export const SUPABASE = (pick('SUPABASE_URL', 'VITE_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_URL') || 'https://wpclkhgizbvxuvbhbwzs.supabase.co').replace(/\/+$/, '');
 // Public publishable key (already shipped in the browser bundle); used only when no env var or request header supplies one.
 const PUBLIC_KEY = 'sb_publishable_GCFJ3Is8t8mdia4gLeHApg_M_3ez9xb';
 const envKey = () => pick('SUPABASE_ANON_KEY', 'SUPABASE_PUBLISHABLE_KEY', 'NEXT_PUBLIC_SUPABASE_ANON_KEY', 'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY');

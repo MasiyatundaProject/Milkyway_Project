@@ -51,8 +51,9 @@ button{border:0;border-radius:10px;padding:10px 12px;font-weight:800;cursor:poin
     <div class="card"><button class="ghost" id="out">Toka</button> <a class="ghost" href="./" style="padding:10px 12px;border-radius:10px;text-decoration:none">Orbit</a></div>
   </div>
 </div>
-<script>
-const sb=supabase.createClient('https://wpclkhgizbvxuvbhbwzs.supabase.co','sb_publishable_GCFJ3Is8t8mdia4gLeHApg_M_3ez9xb');
+<script type="module">
+import { config } from './app/config.js';
+const sb=supabase.createClient(config.supabase.url,config.supabase.anonKey);
 const $=id=>document.getElementById(id);
 function setMessage(container,message,className=''){
   const node=document.createElement('p');node.className=className;node.textContent=message;container.replaceChildren(node);

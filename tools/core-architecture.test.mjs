@@ -711,12 +711,30 @@ test('media uploads compress asynchronously and feed media is cached progressive
 test('provider keys are configured in one place', () => {
   const source = readFileSync(new URL('../milkyway/app/config.js', import.meta.url), 'utf8');
   for (const key of ['supabase', 'livekit', 'cloudinary', 'MW_CONFIG']) assert.ok(source.includes(key));
+  assert.match(source, /import\.meta\.env\?\.VITE_SUPABASE_URL/);
+  assert.match(source, /resolved\.livekit\.directTokenEndpoint/);
   for (const folder of ['core', 'data', 'ui']) {
     for (const file of readdirSync(new URL(`../milkyway/app/${folder}/`, import.meta.url))) {
       const code = readFileSync(new URL(`../milkyway/app/${folder}/${file}`, import.meta.url), 'utf8');
       assert.doesNotMatch(code, /sb_publishable_|supabase\.co/, `${folder}/${file} reads keys from config.js`);
     }
   }
+});
+
+test('Supabase URL environment is used by browser builds and server handlers', () => {
+  const build = readFileSync(new URL('../tools/build-cloudflare.mjs', import.meta.url), 'utf8');
+  const adapter = readFileSync(new URL('../api/_lib/supa.js', import.meta.url), 'utf8');
+  const edge = readFileSync(new URL('../supabase/functions/_shared/milkyway-token.ts', import.meta.url), 'utf8');
+  const serviceWorker = readFileSync(new URL('../milkyway/sw.js', import.meta.url), 'utf8');
+  const moderation = readFileSync(new URL('../milkyway/moderation.html', import.meta.url), 'utf8');
+  assert.match(build, /process\.env\.VITE_SUPABASE_URL/);
+  assert.match(build, /window\.MW_CONFIG/);
+  assert.match(adapter, /'VITE_SUPABASE_URL'/);
+  assert.match(edge, /Deno\.env\.get\('VITE_SUPABASE_URL'\)/);
+  assert.match(serviceWorker, /isPublicStorageUrl/);
+  assert.doesNotMatch(serviceWorker, /wpclkhgizbvxuvbhbwzs\.supabase\.co/);
+  assert.match(moderation, /createClient\(config\.supabase\.url,config\.supabase\.anonKey\)/);
+  assert.doesNotMatch(moderation, /wpclkhgizbvxuvbhbwzs\.supabase\.co/);
 });
 
 test('Cloudflare Pages routes production hosts to the primary custom domain', async () => {

@@ -20,7 +20,7 @@ export default async function handler(req, res) {
   const checks = [];
   const add = (name, ok, detail, level = 'fail') => checks.push({ name, status: ok ? 'ok' : level, detail });
 
-  const rawUrl = first('SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_URL');
+  const rawUrl = first('SUPABASE_URL', 'VITE_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_URL');
   const anonKey = first('SUPABASE_ANON_KEY', 'SUPABASE_PUBLISHABLE_KEY', 'NEXT_PUBLIC_SUPABASE_ANON_KEY', 'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY');
   let supabaseUrl = rawUrl.replace(/\/+$/, '') || `https://${EXPECTED_SUPABASE_HOST}`;
 

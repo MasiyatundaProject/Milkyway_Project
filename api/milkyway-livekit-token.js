@@ -3,13 +3,10 @@
 // tokens are signed right here with the same credentials the Live room API uses for guest seats and moderation.
 // Everything else (calls, conversation rooms) and sites without those settings go through the Supabase
 // livekit-token Edge Function as before.
-import { authenticate } from './_lib/supa.js';
+import { authenticate, SUPABASE } from './_lib/supa.js';
 import { livekitUrl, livekitUsable, accessToken, closeRoom, CAMERA, MIC } from './_lib/livekit.js';
 
-const DEFAULT_SUPABASE_URL = 'https://wpclkhgizbvxuvbhbwzs.supabase.co';
-
 function getSupabaseConfig(req) {
-  const url = (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_SUPABASE_URL).trim().replace(/\/$/, '');
   const apiKey = (
     process.env.SUPABASE_ANON_KEY ||
     process.env.SUPABASE_PUBLISHABLE_KEY ||
@@ -18,7 +15,7 @@ function getSupabaseConfig(req) {
     req.headers.apikey ||
     'sb_publishable_GCFJ3Is8t8mdia4gLeHApg_M_3ez9xb'
   ).trim();
-  return { url, apiKey };
+  return { url: SUPABASE, apiKey };
 }
 
 const LIVE_ROOM = /^mw-(audio|video)-live-[a-f0-9-]{36}$/i;

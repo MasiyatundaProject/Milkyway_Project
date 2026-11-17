@@ -1,5 +1,4 @@
-import { supabaseKey } from './_lib/supa.js';
-const PROJECT_URL = (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://wpclkhgizbvxuvbhbwzs.supabase.co').replace(/\/+$/, '');
+import { supabaseKey, SUPABASE as PROJECT_URL } from './_lib/supa.js';
 function keyFor(req) { return supabaseKey(req); }
 export default async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).setHeader('Allow','GET').json({ error: 'Method not allowed.' });

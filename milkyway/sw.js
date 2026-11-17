@@ -27,7 +27,7 @@ self.addEventListener('sync', event => {
 // online or not. Players ask for byte ranges, so each answer is cut from the saved file and seeking works offline too.
 // Videos that are not saved go straight to the network as before.
 const VIDEO_CACHES=['mw-feed-videos','mw-offline-videos'];
-const VIDEO_STORAGE='https://wpclkhgizbvxuvbhbwzs.supabase.co/storage/v1/object/public/';
+const isPublicStorageUrl=url=>url.hostname.endsWith('.supabase.co')&&url.pathname.startsWith('/storage/v1/object/public/');
 const VIDEO_FILE=/\.(?:mp4|m4v|mov|webm|ogv|3gp)$/i;
 async function savedVideo(request){
   let saved;
@@ -47,8 +47,10 @@ function videoRange(buffer,type,range){
 }
 self.addEventListener('fetch',event=>{
   const request=event.request;
-  if(request.method!=='GET'||!request.url.startsWith(VIDEO_STORAGE))return;
-  let path='';try{path=new URL(request.url).pathname}catch{return}
+  if(request.method!=='GET')return;
+  let address;try{address=new URL(request.url)}catch{return}
+  if(!isPublicStorageUrl(address))return;
+  const path=address.pathname;
   if(request.destination!=='video'&&!VIDEO_FILE.test(path))return;
   event.respondWith(savedVideo(request));
 });

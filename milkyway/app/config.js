@@ -7,9 +7,11 @@
 // (e.g. an inline script injected by the Android shell, an edge function, or a staging page):
 //   <script>window.MW_CONFIG = { livekit: { url: 'wss://my-project.livekit.cloud' }, cloudinary: { cloudName: 'demo' } }</script>
 
+const envSupabaseUrl = import.meta.env?.VITE_SUPABASE_URL;
+
 const defaults = {
   supabase: {
-    url: 'https://wpclkhgizbvxuvbhbwzs.supabase.co',
+    url: envSupabaseUrl || 'https://wpclkhgizbvxuvbhbwzs.supabase.co',
     // Publishable (anon) key — safe in the browser; row-level security protects the data.
     anonKey: 'sb_publishable_GCFJ3Is8t8mdia4gLeHApg_M_3ez9xb',
     // UMD bundle, loaded lazily after first paint (never blocks startup).
@@ -20,7 +22,7 @@ const defaults = {
     url: '',
     tokenEndpoint: '/api/milkyway-livekit-token',
     // Used when the site API is unreachable (e.g. a static mirror).
-    directTokenEndpoint: 'https://wpclkhgizbvxuvbhbwzs.supabase.co/functions/v1/livekit-token',
+    directTokenEndpoint: `${(envSupabaseUrl || 'https://wpclkhgizbvxuvbhbwzs.supabase.co').replace(/\/+$/, '')}/functions/v1/livekit-token`,
     sdkUrls: [
       'https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js',
       'https://unpkg.com/livekit-client@2/dist/livekit-client.umd.js',
@@ -58,4 +60,9 @@ const merge = (base, extra) => {
   return out;
 };
 
-export const config = Object.freeze(merge(defaults, globalThis.MW_CONFIG));
+const resolved = merge(defaults, globalThis.MW_CONFIG);
+if (!globalThis.MW_CONFIG?.livekit?.directTokenEndpoint) {
+  resolved.livekit.directTokenEndpoint = `${String(resolved.supabase.url).replace(/\/+$/, '')}/functions/v1/livekit-token`;
+}
+
+export const config = Object.freeze(resolved);

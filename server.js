@@ -86,7 +86,7 @@ app.use((_request, response) => response.status(404).type('text/plain').send('No
 const port = Number(process.env.PORT) || 3000;
 // Surface misconfiguration at boot; GET /api/milkyway-health runs the full live check.
 const configured = (...names) => names.map(name => (process.env[name] || '').trim()).find(Boolean) || '';
-const startupUrl = configured('SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_URL');
+const startupUrl = configured('SUPABASE_URL', 'VITE_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_URL');
 if (startupUrl && !/^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/i.test(startupUrl)) console.warn('SUPABASE_URL is not a valid https://<project>.supabase.co address.');
 if (!configured('SUPABASE_ANON_KEY', 'SUPABASE_PUBLISHABLE_KEY', 'NEXT_PUBLIC_SUPABASE_ANON_KEY', 'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY')) console.warn('SUPABASE_ANON_KEY is not set; server API routes rely on the key sent by the browser.');
 if (/^sb_secret_/.test(configured('SUPABASE_ANON_KEY')) || /service_role/i.test(configured('SUPABASE_ANON_KEY'))) console.warn('SUPABASE_ANON_KEY looks like a secret key. Use the publishable key only.');

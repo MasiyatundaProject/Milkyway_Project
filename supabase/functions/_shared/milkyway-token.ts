@@ -1,10 +1,10 @@
 import { AccessToken, RoomServiceClient } from 'npm:livekit-server-sdk@2.19.1';
 
-const projectUrl = 'https://wpclkhgizbvxuvbhbwzs.supabase.co';
 const serverUrl = 'wss://masiyatunda-milkyway-live-mgh6b1np.livekit.cloud';
 const authorizationUrl = 'https://www.masiyatunda.com/api/milkyway-media-authorize';
 
 export async function milkywayToken(request: Request) {
+  const projectUrl = (Deno.env.get('SUPABASE_URL') || Deno.env.get('VITE_SUPABASE_URL') || 'https://wpclkhgizbvxuvbhbwzs.supabase.co').replace(/\/+$/, '');
   const origin = request.headers.get('Origin');
   const allowedOrigin = !origin || /^https:\/\/(www\.)?masiyatunda\.com$/.test(origin) || origin === 'https://milkyway-project.pages.dev' || /^https:\/\/[a-z0-9-]+\.onrender\.com$/.test(origin) || /^http:\/\/(localhost|127\.0\.0\.1):(8889|3000|10000)$/.test(origin);
   const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', Vary: 'Origin', ...(origin && allowedOrigin ? { 'Access-Control-Allow-Origin': origin } : {}), 'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info', 'Access-Control-Allow-Methods': 'POST, GET, OPTIONS' };

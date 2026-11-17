@@ -117,7 +117,7 @@ Deno.serve(async request => {
 
   const authorization = request.headers.get('Authorization') || '';
   if (!authorization.startsWith('Bearer ')) return json({ error: 'Sign in first.' }, 401);
-  const supabaseUrl = Deno.env.get('SUPABASE_URL')?.replace(/\/+$/, '');
+  const supabaseUrl = (Deno.env.get('SUPABASE_URL') || Deno.env.get('VITE_SUPABASE_URL'))?.replace(/\/+$/, '');
   const anonKey = Deno.env.get('SUPABASE_ANON_KEY') || request.headers.get('apikey') || '';
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
   if (!supabaseUrl || !anonKey || !serviceKey) return json({ error: 'Wallet verification is not configured on the server.' }, 503);

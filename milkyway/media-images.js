@@ -6,7 +6,6 @@
 //   fast   (4G at 5 Mbps or more): sharper pictures for high-density screens
 // When the connection improves, pictures already on screen are quietly swapped for the sharper version.
 (() => {
-  const origin = 'https://wpclkhgizbvxuvbhbwzs.supabase.co';
   const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
   const RASTER = /\.(?:png|jpe?g|webp|avif|gif)$/i;
   const RANK = { slow: 0, normal: 1, fast: 2 };

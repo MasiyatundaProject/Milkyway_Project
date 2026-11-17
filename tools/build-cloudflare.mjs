@@ -26,6 +26,19 @@ for (const folder of ['img', 'slides', 'milkyway']) {
   if (existsSync(join(root, folder))) cpSync(join(root, folder), join(out, folder), { recursive: true, filter });
 }
 
+const buildSupabaseUrl = process.env.VITE_SUPABASE_URL?.trim();
+if (buildSupabaseUrl) {
+  const address = new URL(buildSupabaseUrl);
+  if (address.protocol !== 'https:' || address.username || address.password || address.pathname !== '/' || address.search || address.hash) {
+    throw new Error('VITE_SUPABASE_URL must be an HTTPS origin without credentials, path, query, or fragment.');
+  }
+  const appIndex = join(out, 'milkyway', 'index.html');
+  const html = readFileSync(appIndex, 'utf8');
+  const config = JSON.stringify(buildSupabaseUrl.replace(/\/+$/, '')).replace(/</g, '\\u003c');
+  const injection = `<script>window.MW_CONFIG={...(window.MW_CONFIG||{}),supabase:{...(window.MW_CONFIG?.supabase||{}),url:${config}}};</script>\n`;
+  writeFileSync(appIndex, html.replace('<!-- Optional provider overrides', `${injection}<!-- Optional provider overrides`));
+}
+
 // The APK is also published under a name that carries its version. Download managers resume interrupted
 // downloads with byte ranges; a versioned file never changes underneath them, so a resumed download can't
 // mix two builds, and browsers or proxies holding an older MilkyWay.apk can never hand it out again.
