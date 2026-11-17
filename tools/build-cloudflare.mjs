@@ -10,6 +10,10 @@ const blocked = /\.(sql|bak|md|txt|map|gradle|java|ts)$/i;
 const maxBytes = 25 * 1024 * 1024; // Cloudflare Pages per-file limit
 const configuredSupabaseUrl = process.env.VITE_SUPABASE_URL?.trim() || process.env.SUPABASE_URL?.trim() || '';
 let buildSupabaseUrl = '';
+const buildId = String(process.env.CF_PAGES_COMMIT_SHA || process.env.BUILD_VERSION || Date.now().toString(36))
+  .trim().replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 80);
+
+if (!buildId) throw new Error('Could not determine a valid deployment version.');
 
 if (configuredSupabaseUrl) {
   let address;
@@ -38,11 +42,23 @@ for (const folder of ['img', 'slides', 'milkyway']) {
   if (existsSync(join(root, folder))) cpSync(join(root, folder), join(out, folder), { recursive: true, filter });
 }
 
-if (buildSupabaseUrl) {
+const appVersion = { buildId, updatedAt: new Date().toISOString() };
+writeFileSync(join(out, 'milkyway', 'app', 'app-version.json'), `${JSON.stringify(appVersion, null, 2)}\n`);
+const workerPath = join(out, 'milkyway', 'sw.js');
+const workerSource = readFileSync(workerPath, 'utf8');
+const versionedWorker = workerSource.replace(/const CACHE='[^']+';/, `const CACHE='milkyway-${buildId}';`);
+if (versionedWorker === workerSource) throw new Error('Could not set the deployment version in the MilkyWay service worker.');
+writeFileSync(workerPath, versionedWorker);
+
+{
   const appIndex = join(out, 'milkyway', 'index.html');
   const html = readFileSync(appIndex, 'utf8');
   const config = JSON.stringify(buildSupabaseUrl).replace(/</g, '\\u003c');
-  const injection = `<script>window.MW_CONFIG={...(window.MW_CONFIG||{}),supabase:{...(window.MW_CONFIG?.supabase||{}),url:${config}}};</script>\n`;
+  const deployment = JSON.stringify(buildId).replace(/</g, '\\u003c');
+  const supabaseConfig = buildSupabaseUrl
+    ? `supabase:{...((window.MW_CONFIG||{}).supabase||{}),url:${config}},`
+    : '';
+  const injection = `<script>window.MW_CONFIG={...(window.MW_CONFIG||{}),deploymentId:${deployment},${supabaseConfig}};</script>\n`;
   writeFileSync(appIndex, html.replace('<!-- Optional provider overrides', `${injection}<!-- Optional provider overrides`));
 }
 
@@ -90,6 +106,8 @@ writeFileSync(join(out, '_headers'), `/*
   Cache-Control: public, max-age=0, must-revalidate
 /milkyway/download/version.json
   Cache-Control: no-cache
+/milkyway/app/app-version.json
+  Cache-Control: no-store
 /MilkyWay.apk
   Content-Type: application/vnd.android.package-archive
   Content-Disposition: attachment; filename="MilkyWay.apk"

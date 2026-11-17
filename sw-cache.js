@@ -168,7 +168,7 @@
       if (request.method !== 'GET' || request.headers.has('Authorization') || request.headers.has('Range')) return;
       if (request.mode !== 'navigate' && ['no-store', 'reload', 'no-cache'].includes(request.cache)) return;
       const address = new URL(request.url);
-      if (address.hostname === 'wpclkhgizbvxuvbhbwzs.supabase.co'
+      if (address.hostname.endsWith('.supabase.co')
         && address.pathname.startsWith('/storage/v1/object/public/portfolio/')
         && /\.(?:jpe?g|png|webp|gif|avif)$/i.test(address.pathname)) {
         event.respondWith(optimizedImage(event));

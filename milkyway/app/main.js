@@ -14,6 +14,7 @@ import { playback } from './ui/playback.js';
 import { toast } from './ui/dom.js';
 import { profiles } from './data/profiles.js';
 import { fetchSharedPost } from './data/feed.js';
+import { startUpdateCheck } from './core/update-check.js';
 
 // Conversation-room links belong to a screen that is not in this shell yet. Call links (#call=<id>) open the call screen.
 const comingSoon = hash => /^#live=mw-conversation-/.test(hash);
@@ -246,7 +247,6 @@ idle(() => {
     lives.load();
   });
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
     // Notification taps forwarded by the worker: Lives and calls open here.
     navigator.serviceWorker.addEventListener('message', ({ data }) => {
       if (data?.type === 'mw-open-live' && data.url) {
@@ -259,4 +259,5 @@ idle(() => {
       }
     });
   }
+  startUpdateCheck(config.deploymentId);
 }, 2500);

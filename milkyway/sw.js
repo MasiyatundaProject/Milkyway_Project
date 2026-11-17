@@ -4,7 +4,7 @@
 const CACHE='milkyway-v228-livekit-room-guard';
 const SHELL=['./','./index.html','./manifest.json','./favicon.ico','./icon-192.png','./icon-512.png','./brand/favicon-32.png','./splash.css?v=1','./splash.js?v=1','./brand/milkyway-splash.webp','./brand/milkyway-watermark-galaxy.webp',
   './app/app.css?v=20','./app/main.js','./app/config.js',
-  './app/core/events.js','./app/core/sdk.js','./app/core/livekit-access.js','./app/core/net.js','./app/core/store.js','./app/core/sync.js','./app/core/device.js','./app/core/media.js','./app/core/media-image.js','./app/core/media-worker.js','./app/core/media-optimizer.js','./app/core/i18n.js','./app/core/locales.js',
+  './app/core/events.js','./app/core/sdk.js','./app/core/livekit-access.js','./app/core/net.js','./app/core/store.js','./app/core/sync.js','./app/core/device.js','./app/core/media.js','./app/core/media-image.js','./app/core/media-worker.js','./app/core/media-optimizer.js','./app/core/update-check.js','./app/core/i18n.js','./app/core/locales.js',
   './app/data/feed.js','./app/data/profiles.js','./app/data/comments.js','./app/data/live.js','./app/data/gifts.js','./app/data/chats.js','./app/data/messages.js','./app/data/presence.js','./app/data/promoted.js','./app/data/post-notifications.js',
   './app/ui/dom.js','./app/ui/pager.js','./app/ui/playback.js','./app/ui/feed-view.js','./app/ui/sheet.js','./app/ui/live-view.js','./app/ui/live-session.js','./app/ui/live-controls.js',
   './app/ui/comments-sheet.js','./app/ui/gift-tray.js','./app/ui/inbox-view.js','./app/ui/auth-sheet.js','./app/ui/profile-view.js','./app/ui/profile-search.js','./app/ui/discovery-view.js','./app/ui/post-viewer.js','./app/ui/compose-sheet.js','./app/ui/call-view.js','./app/ui/settings-view.js','./app/ui/studio-view.js','./app/ui/admin-view.js','./app/ui/wallet-onboarding.js','./app/ui/share-sheet.js',
@@ -106,7 +106,7 @@ self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
   // The dedicated video handler above owns public Supabase video requests.
   // Do not call respondWith a second time for the same fetch event.
-  if (url.startsWith(VIDEO_STORAGE)) return;
+  try { if (isPublicStorageUrl(new URL(url))) return; } catch { return; }
   // Locale catalogs are fetched only when needed and cached after first use for offline language support.
   if (/\/milkyway\/locales\/(?:ar|pt|hi|de)(?:-extra)?\.js(?:\?|$)/i.test(url)) {
     event.respondWith((async () => {

@@ -10,6 +10,7 @@ import { runApi } from '../api/_lib/fetch-adapter.js';
 import { closeRoom } from '../api/_lib/livekit.js';
 import { postShareResponse } from '../api/_lib/post-share.js';
 import { assertRoomAccess } from '../milkyway/app/core/livekit-access.js';
+import { checkDeployment } from '../milkyway/app/core/update-check.js';
 
 const A = '11111111-1111-4111-8111-111111111111'; // public author
 const B = '22222222-2222-4222-8222-222222222222'; // private author
@@ -684,6 +685,33 @@ test('service worker precaches every core module', () => {
       assert.ok(sw.includes(`./app/${folder}/${file}`), `${folder}/${file} is precached`);
     }
   }
+  assert.ok(sw.includes('./app/core/update-check.js'));
+  assert.doesNotMatch(sw, /VIDEO_STORAGE/, 'video fetch handler uses the current storage URL matcher');
+});
+
+test('app checks deployment version without caching and offers refresh for stale clients', async () => {
+  const requests = [];
+  const fetchImpl = async (url, init) => {
+    requests.push({ url: String(url), init });
+    return Response.json({ buildId: 'deploy-new' });
+  };
+  assert.equal(await checkDeployment('deploy-old', fetchImpl), 'deploy-new');
+  assert.equal(await checkDeployment('deploy-new', fetchImpl), null);
+  assert.equal(requests[0].init.cache, 'no-store');
+  assert.match(requests[0].url, /\/milkyway\/app\/app-version\.json$/);
+
+  const updater = readFileSync(new URL('../milkyway/app/core/update-check.js', import.meta.url), 'utf8');
+  const worker = readFileSync(new URL('../milkyway/sw.js', import.meta.url), 'utf8');
+  const cache = readFileSync(new URL('../sw-cache.js', import.meta.url), 'utf8');
+  const build = readFileSync(new URL('../tools/build-cloudflare.mjs', import.meta.url), 'utf8');
+  assert.match(updater, /registration\.update\(\)/);
+  assert.match(updater, /controllerchange/);
+  assert.match(updater, /mw-update-notice/);
+  assert.match(worker, /update-check\.js/);
+  assert.match(cache, /\['no-store', 'reload', 'no-cache'\]/);
+  assert.match(build, /CF_PAGES_COMMIT_SHA/);
+  assert.match(build, /app-version\.json/);
+  assert.match(build, /versionedWorker/);
 });
 
 test('media uploads compress asynchronously and feed media is cached progressively', () => {
