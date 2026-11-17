@@ -1,9 +1,8 @@
 // LiveSession — one real-time Live connection (viewer or host).
 //
 // Media:   LiveKit (WebRTC SFU) with adaptive stream + dynacast, so each viewer only receives the layer its screen needs.
-// Events:  comments, gifts, likes and joins travel on LiveKit data channels (sub-100 ms) AND on a Supabase Realtime
-//          broadcast channel as a fallback. Every event carries an id and is de-duplicated, so a viewer whose WebRTC
-//          is blocked still sees chat and gifts, and nobody sees anything twice.
+// Events:  comments and gifts travel on LiveKit data channels, then are verified against server-persisted records
+//          before they are rendered. Supabase Realtime is used only for presence; the client cannot author events.
 // History: comments are persisted through /api/milkyway-live-room so late joiners see the recent conversation.
 // Viewers: counted from LiveKit participants (authoritative), Realtime presence when LiveKit is not connected.
 //
@@ -27,7 +26,7 @@
 // Live room signals: understands {type:'lv-heart'} / {type:'lv-sync'} signals and sends them.
 import { config } from '../config.js';
 import { t } from '../core/i18n.js';
-import { api, auth, supabase, isNetworkError, accessToken } from '../core/net.js';
+import { api, auth, supabase, accessToken } from '../core/net.js';
 import { loadLiveKit } from '../core/sdk.js';
 import { assertRoomAccess } from '../core/livekit-access.js';
 import { device } from '../core/device.js';
@@ -42,6 +41,7 @@ const STAGE_POLL_MS = 5_000;  // viewers who requested, were invited or are on s
 const HOST_GRACE_MS = 25_000;
 const tokenCache = new Map(); // room → { payload, at }
 const tokenRequests = new Map();
+const endedRooms = new Set();
 // Host decision → the signal the affected viewer receives (they re-read the room at once).
 const HOST_SIGNALS = { approve: 'stage-approve', reject: 'stage-reject', remove: 'stage-remove', kick: 'stage-remove', mute: 'stage-mute', 'allow-mic': 'stage-unmute', invite: 'stage-invite', 'cancel-invite': 'stage-invite' };
 
@@ -93,13 +93,15 @@ async function requestToken(live, host, { direct = false, stage = false } = {}) 
 }
 
 async function fetchToken(live, host, options = {}) {
+  if (endedRooms.has(live.room)) throw Object.assign(new Error('This Live session has ended.'), { status: 404 });
   const { direct = false, stage = false } = options;
   const cacheable = !direct && !host && !stage;
   const cached = tokenCache.get(live.room);
-  if (cacheable && cached && cached.payload && Date.now() - cached.at < 60_000) return cached.payload;
+  if (cacheable && cached && cached.payload && Date.now() - cached.at < 30_000) return cached.payload;
   const key = `${live.room}:${host ? 'host' : stage ? 'stage' : 'viewer'}:${direct ? 'direct' : 'api'}`;
   if (cacheable && tokenRequests.has(key)) return tokenRequests.get(key);
   const pending = requestToken(live, host, options).then(payload => {
+    if (endedRooms.has(live.room)) throw Object.assign(new Error('This Live session has ended.'), { status: 404 });
     if (cacheable) tokenCache.set(live.room, { payload, at: Date.now() });
     return payload;
   }).finally(() => tokenRequests.delete(key));
@@ -324,26 +326,28 @@ export class LiveSession extends Emitter {
     const body = text.trim().slice(0, 300);
     if (!body) return;
     const event = { t: 'chat', id: crypto.randomUUID(), uid: auth.userId, name: auth.name, body, at: Date.now() };
-    this.#deliver(event); // optimistic, instant for the sender
     try {
       const result = await api(config.api.liveRoom, { method: 'POST', body: { room: this.live.room, action: 'message', id: event.id, message: body } });
       if (result?.filtered) return; // hidden from everyone else, like a filtered TikTok comment
+      const saved = result?.message;
+      const accepted = saved ? { ...event, uid: saved.userId, name: saved.name, body: saved.body, at: Date.parse(saved.createdAt) } : event;
+      this.#deliver(accepted);
+      this.#broadcast(accepted, true);
     } catch (error) {
-      if (!isNetworkError(error)) { this.emit('comment-rejected', { id: event.id, error }); return; }
+      this.emit('comment-rejected', { id: event.id, error });
     }
-    this.#broadcast(event, true);
-    this.#legacy({ type: 'lv-sync' });
   }
 
   like() {
-    if (this.settings.likesEnabled === false) return;
+    if (this.settings.likesEnabled === false || this.endedOnce) return;
     this.likeBatch += 1;
     this.emit('like', { n: 1, mine: true });
   }
 
   async gift(key) {
     const result = await sendGift({ gift: key, room: this.live.room });
-    const event = { t: 'gift', id: crypto.randomUUID(), uid: auth.userId, name: auth.name, gift: key, at: Date.now() };
+    const event = { t: 'gift', id: result?.id, uid: auth.userId, name: auth.name, gift: key, at: Date.now() };
+    if (!event.id) throw new Error(t('giftFailed'));
     this.#deliver(event);
     this.#broadcast(event, true);
     return result;
@@ -374,7 +378,6 @@ export class LiveSession extends Emitter {
     if (!lp || this.mode !== 'video' || !this.#mayPublish()) return false;
     const next = !lp.isCameraEnabled;
     await lp.setCameraEnabled(next, { facingMode: this.facing || 'user' });
-    this.#broadcast({ t: 'cam', id: crypto.randomUUID(), uid: auth.userId, on: next }, true);
     this.#emitMedia();
     return next;
   }
@@ -463,7 +466,7 @@ export class LiveSession extends Emitter {
   }
 
   async end() {
-    try { await api(config.api.liveRoom, { method: 'POST', body: { room: this.live.room, action: 'end' } }); } catch {}
+    await api(config.api.liveRoom, { method: 'POST', body: { room: this.live.room, action: 'end' } });
     const event = { t: 'end', id: crypto.randomUUID(), at: Date.now() };
     this.#broadcast(event, true);
     await this.leave();
@@ -587,7 +590,6 @@ export class LiveSession extends Emitter {
     if (!to) return;
     const event = { t: 'sig', id: crypto.randomUUID(), uid: auth.userId, kind, to, ...extra };
     try { this.room?.localParticipant.publishData(encoder.encode(JSON.stringify(event)), { reliable: true, topic: TOPIC, destinationIdentities: [to] }).catch(() => {}); } catch {}
-    try { this.channel?.send({ type: 'broadcast', event: TOPIC, payload: event }); } catch {}
   }
 
   #onSignal(event) {
@@ -595,9 +597,7 @@ export class LiveSession extends Emitter {
     if (this.host) {
       // A viewer asked to join, cancelled or left the stage: show it on the host's screen right now.
       if (['stage-request', 'stage-cancel', 'stage-left'].includes(event.kind)) {
-        clearTimeout(this.nudgeTimer);
-        this.#loadHistory();
-        if (event.kind === 'stage-request') this.emit('stage-request', { userId: event.uid, name: event.name || '' });
+        this.#refreshSoon();
       }
       return;
     }
@@ -697,7 +697,6 @@ export class LiveSession extends Emitter {
       if (this.closed) return;
       const channel = sb.channel(`mw-live:${this.live.room}`, { config: { broadcast: { self: false }, presence: { key: auth.userId || crypto.randomUUID() } } });
       channel
-        .on('broadcast', { event: TOPIC }, ({ payload }) => this.#handle(payload))
         .on('presence', { event: 'sync' }, () => {
           if (this.room?.state === 'connected') return;
           const n = Object.keys(channel.presenceState()).length;
@@ -710,34 +709,107 @@ export class LiveSession extends Emitter {
 
   #broadcast(event, reliable) {
     try { this.room?.localParticipant.publishData(encoder.encode(JSON.stringify(event)), { reliable, topic: TOPIC }).catch(() => {}); } catch {}
-    try { this.channel?.send({ type: 'broadcast', event: TOPIC, payload: event }); } catch {}
-  }
-
-  #legacy(message) {
-    try { this.room?.localParticipant.publishData(encoder.encode(JSON.stringify(message)), { reliable: false }).catch(() => {}); } catch {}
   }
 
   #sendLikes() {
-    if (!this.likeBatch) return;
+    if (!this.likeBatch || this.sendingLikes || this.closed || this.endedOnce) return;
     const n = Math.min(this.likeBatch, 50);
     this.likeBatch = 0;
-    this.#broadcast({ t: 'like', id: crypto.randomUUID(), n }, false);
-    this.#legacy({ type: 'lv-heart' });
+    this.sendingLikes = true;
+    const id = crypto.randomUUID();
+    api(config.api.liveRoom, { method: 'POST', body: { room: this.live.room, action: 'like', id, count: n } })
+      .then(result => {
+        const like = result?.like;
+          if (!like?.id || this.closed || this.endedOnce) return;
+        const event = { t: 'like', id: like.id, uid: like.userId, n: like.count };
+        this.#deliver(event);
+        this.#broadcast(event, false);
+      })
+      .catch(error => this.emit('like-rejected', error))
+      .finally(() => { this.sendingLikes = false; });
   }
 
   #receive(payload, participant) {
+    if (!payload || payload.byteLength > 4096 || !participant?.identity) return;
     let message;
     try { message = JSON.parse(decoder.decode(payload)); } catch { return; }
-    if (message?.type === 'lv-heart') return this.emit('like', { n: 1 });
-    if (message?.type === 'lv-sync') return this.#loadHistory();
-    // LiveKit data is authenticated: the sender's identity replaces whatever the payload claims.
-    if (message && participant?.identity) message.uid = participant.identity;
+    if (!message || typeof message !== 'object' || Array.isArray(message)) return;
+    message.uid = participant.identity;
     this.#handle(message);
   }
 
-  #handle(event) {
-    if (!event?.id || this.seen.has(event.id)) return;
-    this.#deliver(event);
+  #allowReceived(sender, limit) {
+    const now = Date.now();
+    this.receiveRates ||= new Map();
+    let bucket = this.receiveRates.get(sender);
+    if (!bucket || now - bucket.at >= 1000) {
+      bucket = { at: now, count: 0 };
+      this.receiveRates.set(sender, bucket);
+    }
+    if (++bucket.count > limit) return false;
+    if (this.receiveRates.size > 500) this.receiveRates.delete(this.receiveRates.keys().next().value);
+    return true;
+  }
+
+  async #handle(event) {
+    const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+    if (!event || typeof event.t !== 'string' || !uuid.test(event.id || '') || !uuid.test(event.uid || '') || this.seen.has(event.id)) return;
+    if (event.t === 'chat' || event.t === 'gift' || event.t === 'like') {
+      if (event.t === 'chat' && (typeof event.body !== 'string' || event.body.length > 300)) return;
+      if (event.t === 'gift' && (typeof event.gift !== 'string' || event.gift.length > 80)) return;
+      if (event.t === 'like' && (!Number.isInteger(event.n) || event.n < 1 || event.n > 50)) return;
+      if (!this.#allowReceived(event.uid, 20)) return;
+      this.verifyingEvents ||= new Set();
+      if (this.verifyingEvents.has(event.id)) return;
+      this.verifyingEvents.add(event.id);
+      try {
+        const result = await api(config.api.liveRoom, {
+          method: 'POST',
+          body: { room: this.live.room, action: event.t === 'chat' ? 'message-status' : event.t === 'gift' ? 'gift-status' : 'like-status', id: event.id, sender: event.uid },
+          timeout: 8000,
+        });
+        if (event.t === 'chat' && result?.message) {
+          const message = result.message;
+          this.#deliver({ t: 'chat', id: message.id, uid: message.userId, name: message.name, body: message.body, at: Date.parse(message.createdAt) });
+        } else if (event.t === 'gift' && result?.gift) {
+          const gift = result.gift;
+          this.#deliver({ t: 'gift', id: gift.id, uid: gift.sender, gift: gift.gift, at: Date.parse(gift.createdAt) });
+        } else if (event.t === 'like' && result?.like) {
+          const like = result.like;
+          this.#deliver({ t: 'like', id: like.id, uid: like.userId, n: like.count });
+        }
+      } catch { /* polling loads the authoritative history */ }
+      finally { this.verifyingEvents.delete(event.id); }
+      return;
+    }
+    if (!this.#allowReceived(event.uid, 5)) return;
+    if (event.t === 'end') {
+      if (event.uid !== this.live.host.id) return;
+      try {
+        const status = await api(config.api.liveRoom, { method: 'POST', body: { room: this.live.room, action: 'status' }, timeout: 8000 });
+        if (status?.isLive === false) this.#ended();
+      } catch { /* the regular status poll will confirm shutdown */ }
+      return;
+    }
+    if (event.t === 'decline') {
+      if (!this.host || event.uid === this.live.host.id) return;
+      try {
+        const status = await api(config.api.liveRoom, { method: 'POST', body: { room: this.live.room, action: 'status' }, timeout: 8000 });
+        if (!status?.members?.some(member => member.userId === event.uid && member.invited)) return;
+        await this.control('cancel-invite', { target: event.uid }, { quiet: true });
+        this.emit('declined', event.uid);
+      } catch { /* the status poll will reflect the persisted invitation */ }
+      return;
+    }
+    if (event.t === 'sig') {
+      const allowed = ['stage-request', 'stage-cancel', 'stage-left', 'stage-approve', 'stage-reject', 'stage-remove', 'stage-mute', 'stage-unmute', 'stage-invite'];
+      if (!allowed.includes(event.kind) || typeof event.to !== 'string') return;
+      this.#deliver(event);
+      return;
+    }
+    if (event.t === 'room') {
+      if (event.uid === this.live.host.id) this.#deliver(event);
+    }
   }
 
   // Comments from people the host muted or removed (or while comments are off) never render, even if a modified
@@ -760,8 +832,6 @@ export class LiveSession extends Emitter {
       else if (!event.to || (event.to === 'host' && this.host)) this.#onNudge();
     }
     else if (event.t === 'sig') this.#onSignal(event);
-    else if (event.t === 'cam') this.emit('camera', { participant: event.uid, on: !!event.on });
-    else if (event.t === 'decline' && this.host && event.uid) this.control('cancel-invite', { target: event.uid }, { quiet: true }).then(() => this.emit('declined', event.uid)).catch(() => {});
   }
 
   async #loadHistory({ enter = false } = {}) {
@@ -772,8 +842,17 @@ export class LiveSession extends Emitter {
     try {
       const status = await api(config.api.liveRoom, { method: 'POST', body: { room: this.live.room, action: 'status', ...(enter ? { enter: true } : {}) }, timeout: 10000 });
       if (this.closed || !status) return;
+      if (status.isLive === false) { this.#ended(); return; }
       const before = this.status;
       this.status = status;
+      if (this.host) {
+        const previouslyPending = new Set((before?.members || []).filter(member => member.state === 'pending').map(member => member.userId));
+        for (const member of status.members || []) {
+          if (member.state === 'pending' && !previouslyPending.has(member.userId)) {
+            this.emit('stage-request', { userId: member.userId, name: member.name || '' });
+          }
+        }
+      }
       for (const message of status.messages || []) {
         if (message.deleted) { if (this.seen.has(message.id)) this.emit('comment-deleted', message.id); continue; }
         if (message.kind !== 'chat' || this.seen.has(message.id)) continue;
@@ -797,6 +876,10 @@ export class LiveSession extends Emitter {
   #ended() {
     if (this.endedOnce) return;
     this.endedOnce = true;
+    tokenCache.delete(this.live.room);
+    endedRooms.add(this.live.room);
+    if (endedRooms.size > 1000) endedRooms.delete(endedRooms.values().next().value);
+    clearTimeout(this.poll); clearInterval(this.flushLikes); clearTimeout(this.hostTimer); clearTimeout(this.nudgeTimer); clearTimeout(this.rightsTimer);
     this.emit('ended');
   }
 }

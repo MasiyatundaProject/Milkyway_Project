@@ -1,3 +1,5 @@
+import { logError } from './observability.js';
+
 // Shared helpers for the Render API handlers. Every call runs as the signed-in user (their JWT + the public
 // anon key), so Supabase row-level security and SECURITY DEFINER functions decide what is allowed.
 // No service-role key is used or required.
@@ -76,7 +78,8 @@ function makeContext(user, token, key) {
     try { data = text ? JSON.parse(text) : null; } catch { data = text; }
     if (!result.ok) {
       const message = typeof data === 'object' && data ? data.message || data.error || data.hint : '';
-      const status = result.status === 401 ? 401 : result.status === 404 ? 404 : [400, 403, 409, 422].includes(result.status) ? result.status : 503;
+      const status = /Slow mode is on/.test(message) ? 429
+        : result.status === 401 ? 401 : result.status === 404 ? 404 : [400, 403, 409, 422].includes(result.status) ? result.status : 503;
       throw new ApiError(status, status === 403 ? 'Not allowed.' : message || 'Request failed.');
     }
     return data;
@@ -96,6 +99,8 @@ function makeContext(user, token, key) {
 export function route(table) {
   return async (request, response) => {
     response.setHeader('Cache-Control', 'no-store');
+    const requestId = request.headers?.['x-request-id'] || '';
+    if (requestId) response.setHeader('X-Request-Id', requestId);
     const action = String(request.query?.action || '').toLowerCase();
     const entry = table[action];
     if (!entry) return fail(response, 400, `Unknown action "${action}".`);
@@ -104,11 +109,18 @@ export function route(table) {
     try {
       const ctx = await authenticate(request, response, { optional: !needsAuth });
       if (!ctx) return;
+      ctx.requestId = requestId || 'unavailable';
       const result = await run({ request, ctx, query: request.query || {}, body: request.body && typeof request.body === 'object' ? request.body : {}, method: request.method });
       if (!response.headersSent) response.status(200).json(result ?? { ok: true });
     } catch (error) {
       if (response.headersSent) return;
       if (error instanceof ApiError) return fail(response, error.status, error.message);
+      logError('api.route_failed', error, {
+        requestId: requestId || 'unavailable',
+        route: request.url?.split('?')[0] || 'unknown',
+        action,
+        method: request.method,
+      });
       fail(response, 500, 'Service unavailable.');
     }
   };

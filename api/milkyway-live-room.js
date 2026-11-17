@@ -1,6 +1,6 @@
 import { route, ApiError, requireUuid, isUuid } from './_lib/supa.js';
 import { LIVE_DEFAULTS as DEFAULTS, loadLiveSettings as loadSettings } from './_lib/live-policy.js';
-import { livekit, livekitConfigured, CAMERA, MIC } from './_lib/livekit.js';
+import { livekit, livekitConfigured, retryRoomCleanups, closeRoom, CAMERA, MIC } from './_lib/livekit.js';
 
 // Co-host Live rooms (TikTok-style guests). The client polls `status`; request/approve/mute/remove change who may
 // publish. Publish rights are changed in LiveKit itself with the server secret, so a guest cannot grant themselves
@@ -14,7 +14,6 @@ const ADMISSIONS = ['approval', 'broadcast']; // guests only ever reach the stag
 const COMMENT_MODES = ['everyone', 'followers', 'off'];
 const SLOW_MODES = [0, 3, 10, 30, 60];
 const INVITE_TTL_MS = 3 * 60_000;
-const LINK = /(https?:\/\/|www\.|\b[a-z0-9-]{2,}\.(com|net|org|io|co|tz|ke|ug|me|ly|app|link|xyz|info|biz|site|online|shop)\b)/i;
 const cleanBackground = value => {
   if (typeof value !== 'string' || value.length > 2048) throw new ApiError(400, 'Enter a valid HTTPS background URL.');
   if (!value.trim()) return '';
@@ -75,9 +74,18 @@ async function whoAmI(ctx) {
 async function loadRoom(ctx, body) {
   const roomName = typeof body.room === 'string' ? body.room : typeof body.roomName === 'string' ? body.roomName : '';
   if (!ROOM.test(roomName)) throw new ApiError(400, 'Invalid Live room.');
-  const [record] = await ctx.rest(`mw_video_live_sessions?room_name=eq.${encodeURIComponent(roomName)}&select=id,host_id,is_live,title&limit=1`) || [];
+  const [record] = await ctx.rest(`mw_video_live_sessions?room_name=eq.${encodeURIComponent(roomName)}&select=id,host_id,is_live,title,scope&limit=1`) || [];
   if (!record) throw new ApiError(404, 'This Live session is no longer available.');
-  return { roomName, record, host: record.host_id === ctx.user.id, audio: roomName.startsWith('mw-audio-') };
+  const host = record.host_id === ctx.user.id;
+  if (!host) {
+    if (record.scope === 'followers') {
+      const follows = await ctx.rest(`mw_follows?follower_id=eq.${ctx.user.id}&following_id=eq.${record.host_id}&select=follower_id&limit=1`);
+      if (!follows?.length) throw new ApiError(403, 'This session is for followers only.');
+    } else if (!['public', 'everyone'].includes(record.scope)) {
+      throw new ApiError(403, 'This Live session is not available.');
+    }
+  }
+  return { roomName, record, host, audio: roomName.startsWith('mw-audio-') };
 }
 
 
@@ -147,30 +155,9 @@ async function status(ctx, room, { enter = false } = {}) {
     messages: (messages || []).reverse().map(row => ({ id: row.id, userId: row.user_id, name: row.name, avatar: row.avatar, kind: row.kind, body: row.deleted ? '' : row.body, deleted: !!row.deleted, createdAt: row.created_at })),
     connected: room.host ? connected : [],
     viewerCount: Math.max(0, connected.filter(id => id !== room.record.host_id).length),
+    isLive: room.record.is_live,
     title: room.record.title || '',
   };
-}
-
-// Comment rules set by the host. Returns 'ok' or 'filtered' (stored hidden, shown only to the sender), or throws.
-async function checkComment(ctx, room, settings, text) {
-  if (room.host) return 'ok';
-  const me = ctx.user.id.toLowerCase();
-  if (settings.blockedIds.includes(me)) throw new ApiError(403, kickedMessage);
-  if (settings.comments === 'off') throw new ApiError(403, 'The host turned off comments.');
-  if (settings.mutedIds.includes(me)) throw new ApiError(403, 'The host muted your comments in this LIVE.');
-  if (settings.comments === 'followers') {
-    const [follow] = await ctx.rest(`mw_follows?follower_id=eq.${ctx.user.id}&following_id=eq.${room.record.host_id}&select=follower_id&limit=1`).catch(() => []) || [];
-    if (!follow) throw new ApiError(403, 'Only followers of the host can comment.');
-  }
-  if (settings.slowMode > 0) {
-    const since = new Date(Date.now() - settings.slowMode * 1000).toISOString();
-    const recent = await ctx.rest(`mw_live_room_messages?room_name=eq.${enc(room.roomName)}&user_id=eq.${ctx.user.id}&created_at=gt.${enc(since)}&select=id&limit=1`).catch(() => []);
-    if (recent?.length) throw new ApiError(429, `Slow mode is on: one comment every ${settings.slowMode} seconds.`);
-  }
-  const lower = text.toLowerCase();
-  if (settings.filterLinks && LINK.test(text)) return 'filtered';
-  if (settings.filterWords.some(word => lower.includes(word))) return 'filtered';
-  return 'ok';
 }
 
 function cleanWords(value) {
@@ -180,6 +167,7 @@ function cleanWords(value) {
 
 async function handle({ ctx, body, method }) {
   if (method !== 'POST') throw new ApiError(405, 'Method not allowed.');
+  await retryRoomCleanups(ctx, 1);
   const action = String(body.action || 'status');
   const room = await loadRoom(ctx, body);
   const target = () => requireUuid(typeof body.target === 'string' ? body.target.toLowerCase() : '', 'participant');
@@ -234,11 +222,33 @@ async function handle({ ctx, body, method }) {
     const id = requireUuid(body.id, 'message');
     const text = typeof body.message === 'string' ? body.message.trim().slice(0, 300) : '';
     if (!text) throw new ApiError(400, 'Write a message first.');
-    const settings = await loadSettings(ctx, room.roomName);
-    const verdict = await checkComment(ctx, room, settings, text);
-    const user = await whoAmI(ctx);
-    await ctx.rest('mw_live_room_messages', { method: 'POST', prefer: 'resolution=ignore-duplicates', body: { id, room_name: room.roomName, user_id: ctx.user.id, name: user.name, avatar: user.avatar, kind: 'chat', body: text, deleted: verdict === 'filtered' } });
-    return { ok: true, filtered: verdict === 'filtered' };
+    return ctx.rpc('mw_live_room_send_message', { p_id: id, p_room_name: room.roomName, p_body: text });
+  }
+
+  if (action === 'message-status') {
+    const id = requireUuid(body.id, 'message');
+    const sender = requireUuid(body.sender, 'sender');
+    const [message] = await ctx.rest(`mw_live_room_messages?id=eq.${id}&room_name=eq.${enc(room.roomName)}&user_id=eq.${sender}&kind=eq.chat&deleted=eq.false&select=id,user_id,name,body,created_at&limit=1`) || [];
+    return { message: message ? { id: message.id, userId: message.user_id, name: message.name, body: message.body, createdAt: message.created_at } : null };
+  }
+
+  if (action === 'gift-status') {
+    const id = requireUuid(body.id, 'gift');
+    const sender = requireUuid(body.sender, 'sender');
+    return { gift: await ctx.rpc('mw_live_room_gift_status', { p_id: id, p_room_name: room.roomName, p_sender: sender }) };
+  }
+
+  if (action === 'like') {
+    const id = requireUuid(body.id, 'like');
+    const count = Number(body.count);
+    if (!Number.isInteger(count) || count < 1 || count > 50) throw new ApiError(400, 'Invalid like event.');
+    return { like: await ctx.rpc('mw_live_room_send_like', { p_id: id, p_room_name: room.roomName, p_count: count }) };
+  }
+
+  if (action === 'like-status') {
+    const id = requireUuid(body.id, 'like');
+    const sender = requireUuid(body.sender, 'sender');
+    return { like: await ctx.rpc('mw_live_room_like_status', { p_id: id, p_room_name: room.roomName, p_sender: sender }) };
   }
 
   // ---- Host controls --------------------------------------------------------------------------------------
@@ -391,8 +401,8 @@ async function handle({ ctx, body, method }) {
 
   if (action === 'end') {
     await ctx.rest(`mw_video_live_sessions?id=eq.${room.record.id}`, { method: 'PATCH', body: { is_live: false, ended_at: new Date().toISOString() } });
-    await livekit('DeleteRoom', room.roomName, {}).catch(() => {});
-    return { ok: true };
+    const closed = await closeRoom(ctx, room.roomName);
+    return { ok: true, cleanupPending: !closed };
   }
 
   throw new ApiError(400, 'Unsupported room action.');

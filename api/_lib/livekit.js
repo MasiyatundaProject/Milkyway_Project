@@ -3,6 +3,7 @@
 // (guest seats, mic mutes, removals) always apply to the room the viewers actually joined.
 import { createHmac, randomUUID } from 'node:crypto';
 import { ApiError } from './supa.js';
+import { logError, logWarning } from './observability.js';
 
 const env = name => (process.env[name] || '').trim();
 const b64 = value => Buffer.from(typeof value === 'string' ? value : JSON.stringify(value)).toString('base64url');
@@ -81,8 +82,61 @@ export async function livekitUsable() {
 }
 export const livekitCredentialStatus = () => ({ ...credentialCheck });
 
+async function claimCleanup(ctx, roomName = null) {
+  const jobs = await ctx.rpc('mw_room_cleanup_claim', { p_room_name: roomName });
+  const job = Array.isArray(jobs) ? jobs[0] : null;
+  return job ? { room_name: job.job_room_name, job_lease_id: job.job_lease_id } : null;
+}
+
+async function runCleanup(ctx, job) {
+  if (!job?.room_name || !job?.job_lease_id) return false;
+  try {
+    const participants = await livekit('ListParticipants', job.room_name, {});
+    const revokeTokenTs = String(Math.ceil(Date.now() / 1000));
+    for (const participant of participants?.participants || []) {
+      await livekit('RemoveParticipant', job.room_name, { identity: participant.identity, revokeTokenTs });
+    }
+    await livekit('DeleteRoom', job.room_name, {});
+    await ctx.rpc('mw_room_cleanup_complete', { p_room_name: job.room_name, p_lease_id: job.job_lease_id });
+    return true;
+  } catch (error) {
+    try {
+      await ctx.rpc('mw_room_cleanup_retry', {
+        p_room_name: job.room_name,
+        p_lease_id: job.job_lease_id,
+        p_error: String(error?.message || 'LiveKit room cleanup failed').slice(0, 240),
+      });
+    } catch (queueError) {
+      logError('livekit.cleanup_retry_record_failed', queueError, { requestId: ctx.requestId || 'unavailable', room: job.room_name });
+    }
+    logError('livekit.room_cleanup_failed', error, { requestId: ctx.requestId || 'unavailable', room: job.room_name });
+    return false;
+  }
+}
+
+/** Queue and immediately attempt an idempotent room close; failed closes remain available for retry. */
+export async function closeRoom(ctx, roomName) {
+  await ctx.rpc('mw_room_cleanup_enqueue', { p_room_name: roomName });
+  const job = await claimCleanup(ctx, roomName);
+  return job ? runCleanup(ctx, job) : true;
+}
+
+/** Opportunistically drains a small amount of queued cleanup work on authenticated API traffic. */
+export async function retryRoomCleanups(ctx, limit = 1) {
+  for (let index = 0; index < limit; index++) {
+    let job;
+    try { job = await claimCleanup(ctx); }
+    catch (error) {
+      logWarning('livekit.cleanup_queue_unavailable', { requestId: ctx.requestId || 'unavailable', message: String(error?.message || error).slice(0, 240) });
+      return;
+    }
+    if (!job) return;
+    await runCleanup(ctx, job);
+  }
+}
+
 /** Signs a participant access token for one room. `sources` are CAMERA / MIC numbers. */
-export function accessToken({ identity, name = '', metadata = '', room, canPublish = false, sources = [], ttlSeconds = 3600 }) {
+export function accessToken({ identity, name = '', metadata = '', room, canPublish = false, sources = [], ttlSeconds = 60 }) {
   const now = Math.floor(Date.now() / 1000);
   return sign({
     iss: env('LIVEKIT_API_KEY'), sub: identity, name: String(name || 'MilkyWay user').slice(0, 80), metadata, jti: randomUUID(),

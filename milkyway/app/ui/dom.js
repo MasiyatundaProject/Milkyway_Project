@@ -52,15 +52,47 @@ export const icon = {
   eye: svg('<path d="M12 5C6.5 5 2.7 9.3 1.5 12c1.2 2.7 5 7 10.5 7s9.3-4.3 10.5-7C21.3 9.3 17.5 5 12 5zm0 11a4 4 0 1 1 0-8 4 4 0 0 1 0 8z"/>'),
 };
 
-const compact = new Intl.NumberFormat(lang, { notation: 'compact', maximumFractionDigits: 1 });
-export const count = value => (value > 0 ? compact.format(value) : '0');
+const formatterCache = new Map();
+function formatter(Constructor, options = {}) {
+  const locale = document.documentElement.lang || lang;
+  const key = `${Constructor.name}:${locale}:${JSON.stringify(options)}`;
+  if (!formatterCache.has(key)) formatterCache.set(key, new Constructor(locale, options));
+  return formatterCache.get(key);
+}
 
-const relative = new Intl.RelativeTimeFormat(lang, { numeric: 'auto', style: 'narrow' });
+export function formatNumber(value, options = {}) {
+  const number = Number(value);
+  return Number.isFinite(number) ? formatter(Intl.NumberFormat, options).format(number) : '';
+}
+
+export function formatCurrency(value, currency, options = {}) {
+  try {
+    return formatNumber(value, { ...options, style: 'currency', currency });
+  } catch {
+    return formatNumber(value, options);
+  }
+}
+
+export const count = value => {
+  const number = Number(value);
+  return formatNumber(number > 0 ? number : 0, number > 0 ? { notation: 'compact', maximumFractionDigits: 1 } : {});
+};
+
+export function formatDateTime(value, options = {}) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  const hasComponents = ['weekday', 'era', 'year', 'month', 'day', 'hour', 'minute', 'second', 'fractionalSecondDigits', 'timeZoneName']
+    .some(key => options[key] !== undefined);
+  return formatter(Intl.DateTimeFormat, { ...(hasComponents ? {} : { dateStyle: 'medium', timeStyle: 'short' }), ...options }).format(date);
+}
+
 export function ago(iso) {
   const seconds = Math.round((Date.parse(iso) - Date.now()) / 1000);
   if (!Number.isFinite(seconds)) return '';
   const steps = [[60, 'second'], [3600, 'minute', 60], [86400, 'hour', 3600], [604800, 'day', 86400], [2629800, 'week', 604800], [Infinity, 'month', 2629800]];
-  for (const [limit, unit, divisor = 1] of steps) if (Math.abs(seconds) < limit) return relative.format(Math.round(seconds / divisor), unit);
+  for (const [limit, unit, divisor = 1] of steps) if (Math.abs(seconds) < limit) {
+    return formatter(Intl.RelativeTimeFormat, { numeric: 'auto', style: 'narrow' }).format(Math.round(seconds / divisor), unit);
+  }
   return '';
 }
 

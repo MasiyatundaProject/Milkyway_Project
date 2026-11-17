@@ -1,5 +1,5 @@
 import { route, ApiError, SUPABASE, requireUuid } from './_lib/supa.js';
-import { livekitUrl, livekitUsable, accessToken, CAMERA, MIC } from './_lib/livekit.js';
+import { livekitUrl, livekitUsable, accessToken, closeRoom, retryRoomCleanups, CAMERA, MIC } from './_lib/livekit.js';
 
 const OUTCOMES = ['ended', 'missed', 'cancelled', 'rejected', 'disconnected'];
 const RING_WINDOW_MS = 60000;
@@ -24,7 +24,7 @@ async function access(ctx, call, name) {
     let profile = null;
     try { [profile] = await ctx.rest(`mw_profiles?id=eq.${ctx.user.id}&select=display_name,username,avatar_url&limit=1`) || []; } catch {}
     const token = accessToken({
-      identity: ctx.user.id, room: roomName, canPublish: true, sources: video ? [CAMERA, MIC] : [MIC], ttlSeconds: 2 * 3600,
+      identity: ctx.user.id, room: roomName, canPublish: true, sources: video ? [CAMERA, MIC] : [MIC], ttlSeconds: 60,
       name: String(name || profile?.display_name || profile?.username || 'MilkyWay user').slice(0, 80),
       metadata: JSON.stringify({ avatar: String(profile?.avatar_url || '').slice(0, 500) }),
     });
@@ -70,12 +70,20 @@ export default route({
 
   start: async ({ ctx, body, method }) => {
     POST_ONLY(method);
+    await retryRoomCleanups(ctx, 1);
     const callee = requireUuid(body.callee, 'callee');
     if (callee === ctx.user.id) throw new ApiError(400, 'You cannot call yourself.');
     const mode = body.mode === 'video' ? 'video' : 'audio';
     const name = cleanName(body.name);
     // A caller only ever has one ringing call; older ones are closed as cancelled.
-    await ctx.rest(`mw_dm_calls?caller_id=eq.${ctx.user.id}&status=eq.ringing`, { method: 'PATCH', body: { status: 'ended', ended_at: new Date().toISOString(), answer: { outcome: 'cancelled' } } });
+    const previous = await ctx.rest(`mw_dm_calls?caller_id=eq.${ctx.user.id}&status=eq.ringing`, {
+      method: 'PATCH', returning: true,
+      body: { status: 'ended', ended_at: new Date().toISOString(), answer: { outcome: 'cancelled' } },
+    }) || [];
+    for (const oldCall of previous) {
+      const oldRoom = `mw-conversation-${oldCall.offer?.mode === 'video' ? 'video' : 'audio'}-${oldCall.id}`;
+      await closeRoom(ctx, oldRoom);
+    }
     const [call] = await ctx.rest('mw_dm_calls', { method: 'POST', returning: true, body: { caller_id: ctx.user.id, callee_id: callee, status: 'ringing', offer: { transport: 'livekit', mode, name } } }) || [];
     if (!call) throw new ApiError(503, 'Call could not start.');
     // Let the client request its token after opening the call UI; token issuance must not delay ringing.
@@ -99,19 +107,23 @@ export default route({
     const id = requireUuid(body.id, 'call');
     const [call] = await ctx.rest(`mw_dm_calls?id=eq.${id}&callee_id=eq.${ctx.user.id}&status=eq.ringing`, { method: 'PATCH', returning: true, body: { status: 'declined', ended_at: new Date().toISOString(), answer: { outcome: 'rejected' } } }) || [];
     if (!call) throw new ApiError(409, 'This call is no longer ringing.');
+    const cleanupPending = !await closeRoom(ctx, `mw-conversation-${call.offer?.mode === 'video' ? 'video' : 'audio'}-${call.id}`);
     await nudge(ctx, call.caller_id, call.id, 'declined');
-    return { call };
+    return { call, cleanupPending };
   },
 
   end: async ({ ctx, body, method }) => {
     POST_ONLY(method);
     const call = await loadCall(ctx, body.id);
-    if (['ended', 'declined'].includes(call.status)) return { call };
-    const outcome = OUTCOMES.includes(body.outcome) ? body.outcome : 'ended';
-    const [ended] = await ctx.rest(`mw_dm_calls?id=eq.${call.id}&status=in.(ringing,accepted)`, { method: 'PATCH', returning: true, body: { status: 'ended', ended_at: new Date().toISOString(), answer: { ...(call.answer || {}), outcome } } }) || [];
-    const result = ended || call;
+    let result = call;
+    if (!['ended', 'declined'].includes(call.status)) {
+      const outcome = OUTCOMES.includes(body.outcome) ? body.outcome : 'ended';
+      const [ended] = await ctx.rest(`mw_dm_calls?id=eq.${call.id}&status=in.(ringing,accepted)`, { method: 'PATCH', returning: true, body: { status: 'ended', ended_at: new Date().toISOString(), answer: { ...(call.answer || {}), outcome } } }) || [];
+      result = ended || call;
+    }
+    const cleanupPending = !await closeRoom(ctx, `mw-conversation-${call.offer?.mode === 'video' ? 'video' : 'audio'}-${call.id}`);
     await nudge(ctx, call.caller_id === ctx.user.id ? call.callee_id : call.caller_id, call.id, 'ended');
-    return { call: result };
+    return { call: result, cleanupPending };
   },
 
   incoming: async ({ ctx, method }) => {
@@ -122,8 +134,19 @@ export default route({
 
   token: async ({ ctx, body, method }) => {
     POST_ONLY(method);
-    const call = await loadCall(ctx, body.id);
+    await retryRoomCleanups(ctx, 1);
+    let call = await loadCall(ctx, body.id);
     if (!['ringing', 'accepted'].includes(call.status)) throw new ApiError(409, 'This call has ended.');
+    const ringingAge = Date.now() - Date.parse(call.created_at);
+    if (call.status === 'ringing' && (!Number.isFinite(ringingAge) || ringingAge > RING_WINDOW_MS)) {
+      const [ended] = await ctx.rest(`mw_dm_calls?id=eq.${call.id}&status=eq.ringing`, {
+        method: 'PATCH', returning: true,
+        body: { status: 'ended', ended_at: new Date().toISOString(), answer: { outcome: 'missed' } },
+      }) || [];
+      call = ended || call;
+      await closeRoom(ctx, `mw-conversation-${call.offer?.mode === 'video' ? 'video' : 'audio'}-${call.id}`);
+      throw new ApiError(409, 'This call has ended.');
+    }
     return access(ctx, call, cleanName(body.name));
   },
 });

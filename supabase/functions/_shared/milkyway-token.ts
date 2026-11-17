@@ -6,7 +6,7 @@ const authorizationUrl = 'https://www.masiyatunda.com/api/milkyway-media-authori
 
 export async function milkywayToken(request: Request) {
   const origin = request.headers.get('Origin');
-  const allowedOrigin = !origin || /^https:\/\/(www\.)?masiyatunda\.com$/.test(origin) || /^https:\/\/[a-z0-9-]+\.onrender\.com$/.test(origin) || /^http:\/\/(localhost|127\.0\.0\.1):(8889|3000|10000)$/.test(origin);
+  const allowedOrigin = !origin || /^https:\/\/(www\.)?masiyatunda\.com$/.test(origin) || origin === 'https://milkyway-project.pages.dev' || /^https:\/\/[a-z0-9-]+\.onrender\.com$/.test(origin) || /^http:\/\/(localhost|127\.0\.0\.1):(8889|3000|10000)$/.test(origin);
   const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', Vary: 'Origin', ...(origin && allowedOrigin ? { 'Access-Control-Allow-Origin': origin } : {}), 'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info', 'Access-Control-Allow-Methods': 'POST, GET, OPTIONS' };
   const json = (body: Record<string, unknown>, status = 200) => new Response(JSON.stringify({ contractVersion: 2, ...body }), { status, headers });
   if (!allowedOrigin) return json({ error: 'Origin not allowed.' }, 403);
@@ -100,11 +100,11 @@ export async function milkywayToken(request: Request) {
               : member.host_muted ? [1] : [1, 2])
             : [];
         canPublish = sources.length > 0;
-        const token = new AccessToken(apiKey!, apiSecret!, { identity: account.id, name: String(body.name || 'MilkyWay user').slice(0, 80), ttl: '1h' });
+        const token = new AccessToken(apiKey!, apiSecret!, { identity: account.id, name: String(body.name || 'MilkyWay user').slice(0, 80), ttl: '1m' });
         token.addGrant({ roomJoin: true, room: roomName, canSubscribe: true, canPublish, canPublishData: true, canPublishSources: sources });
         return json({ token: await token.toJwt(), serverUrl, roomName, room: roomName });
       }
-      const token = new AccessToken(apiKey!, apiSecret!, { identity: account.id, name: String(body.name || 'MilkyWay user').slice(0, 80), ttl: '1h' });
+      const token = new AccessToken(apiKey!, apiSecret!, { identity: account.id, name: String(body.name || 'MilkyWay user').slice(0, 80), ttl: '1m' });
       token.addGrant({ roomJoin: true, room: roomName, canSubscribe: true, canPublish, canPublishData: true, canPublishSources: canPublish ? audioOnly ? [2] : [1, 2] : [] });
       return json({ token: await token.toJwt(), serverUrl, roomName, room: roomName });
     }
@@ -119,7 +119,7 @@ export async function milkywayToken(request: Request) {
     const permissions = action === 'end' ? null : { canSubscribe: true, canPublishData: false, canPublish: grant.permissions.canPublish === true, canPublishSources: grant.permissions.canPublishSources };
     if (permissions && (!Array.isArray(permissions.canPublishSources) || permissions.canPublishSources.some((source: number) => ![1, 2].includes(source)))) return json({ error: 'Invalid room media permissions.' }, 503);
     if (action === 'token') {
-      const token = new AccessToken(apiKey!, apiSecret!, { identity: account.id, name: grant.name, metadata: JSON.stringify({ avatar: grant.avatar || '' }), ttl: '10m' });
+      const token = new AccessToken(apiKey!, apiSecret!, { identity: account.id, name: grant.name, metadata: JSON.stringify({ avatar: grant.avatar || '' }), ttl: '1m' });
       token.addGrant({ roomJoin: true, room: roomName, ...permissions });
       return json({ token: await token.toJwt(), serverUrl, roomName });
     }

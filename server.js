@@ -3,11 +3,17 @@ import { existsSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { postShareResponse } from './api/_lib/post-share.js';
+import { logError, requestId as getRequestId } from './api/_lib/observability.js';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', true);
+app.use((request, response, next) => {
+  request.requestId = getRequestId(request);
+  response.setHeader('X-Request-Id', request.requestId);
+  next();
+});
 // LIVE needs the microphone and camera on this origin; other powerful features stay off.
 app.use((_request, response, next) => {
   response.setHeader('Permissions-Policy', 'camera=(self), microphone=(self), autoplay=(self), fullscreen=(self), geolocation=()');
@@ -31,7 +37,10 @@ app.all('/api/:name', async (request, response) => {
   const handler = handlers.get(request.params.name);
   if (!handler) return response.status(404).json({ error: 'Not found.' });
   try { await handler(request, response); }
-  catch { if (!response.headersSent) response.status(500).json({ error: 'Service unavailable.' }); }
+  catch (error) {
+    logError('api.unhandled', error, { requestId: request.requestId, route: request.params.name, method: request.method });
+    if (!response.headersSent) response.status(500).json({ error: 'Service unavailable.', requestId: request.requestId });
+  }
 });
 // Body-parser failures (bad JSON, oversize) must stay JSON so the client never receives an HTML error page.
 app.use('/api', (error, _request, response, next) => {

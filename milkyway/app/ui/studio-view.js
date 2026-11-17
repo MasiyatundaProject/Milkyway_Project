@@ -2,7 +2,7 @@ import { config } from '../config.js';
 import { t } from '../core/i18n.js';
 import { api, auth, supabase } from '../core/net.js';
 import { actions } from '../data/feed.js';
-import { ago, count, h, toast } from './dom.js';
+import { ago, count, formatDateTime, h, toast } from './dom.js';
 
 const SERVICE_FIELDS = 'id,creator_id,title,category,description,pricing,created_at';
 const clean = value => String(value || '').trim();
@@ -156,7 +156,7 @@ export class StudioView {
         h('span', { class: 'nova-kind', 'aria-hidden': 'true' }, /video/.test(post.media_type || '') ? '🎬' : post.media_url ? '🖼' : '✍️'),
         h('div', { class: 'mw-studio-post-copy' },
           h('b', {}, (post.caption || t('post')).slice(0, 100)),
-          h('small', { class: 'muted' }, `${scheduled ? `${t('studioScheduled')} · ${new Date(post.scheduled_at).toLocaleString()}` : ago(post.created_at)}${pinned ? ` · ${t('studioPinned')}` : ''}`)),
+          h('small', { class: 'muted' }, `${scheduled ? `${t('studioScheduled')} · ${formatDateTime(post.scheduled_at)}` : ago(post.created_at)}${pinned ? ` · ${t('studioPinned')}` : ''}`)),
         h('div', { class: 'mw-studio-post-actions' },
           h('button', { class: 'pill-btn', type: 'button', onclick: () => this.hooks.onOpenPost?.(post) }, t('openPost')),
           h('button', { class: 'pill-btn', type: 'button', disabled: Boolean(scheduled), onclick: () => this.#togglePin(post, pinned, item, content) }, pinned ? t('studioUnpin') : t('studioPin')),
@@ -302,7 +302,7 @@ export class StudioView {
           h('small', { class: 'muted' }, ago(request.created_at))),
         h('span', { class: `mw-studio-request-status ${request.status}` }, t(`studioStatus_${request.status}`))),
       h('p', {}, request.message),
-      request.preferred_at ? h('p', { class: 'muted' }, `${t('studioPreferredTime')}: ${new Date(request.preferred_at).toLocaleString()}`) : null,
+      request.preferred_at ? h('p', { class: 'muted' }, `${t('studioPreferredTime')}: ${formatDateTime(request.preferred_at)}`) : null,
       request.creator_reply ? h('p', { class: 'mw-studio-reply' }, `${t('studioProviderReply')}: ${request.creator_reply}`) : null));
     content.replaceChildren(
       h('div', { class: 'mw-studio-section-head' },
@@ -328,7 +328,7 @@ export class StudioView {
           h('small', { class: 'muted' }, `${inquiry.client_name || t('studioClient')} · ${ago(inquiry.created_at)}`)),
         status),
       h('p', {}, inquiry.message),
-      inquiry.preferred_at ? h('p', { class: 'muted' }, `${t('studioPreferredTime')}: ${new Date(inquiry.preferred_at).toLocaleString()}`) : null,
+      inquiry.preferred_at ? h('p', { class: 'muted' }, `${t('studioPreferredTime')}: ${formatDateTime(inquiry.preferred_at)}`) : null,
       reply,
       h('button', { class: 'pill-btn', type: 'button', onclick: async event => {
         const button = event.currentTarget;

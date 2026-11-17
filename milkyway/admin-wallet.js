@@ -4,7 +4,11 @@
   const el = id => document.getElementById(id);
   const esc = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
   const endpoint = '/api/milkyway-wallet';
-  const tzs = value => `${Number(value || 0).toLocaleString()} TZS`;
+  const tzs = value => {
+    const amount = Number(value || 0);
+    try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'TZS', maximumFractionDigits: 0 }).format(amount); }
+    catch { return `${amount.toLocaleString()} TZS`; }
+  };
   // What the member saw in their own currency (saved from the country detected when they joined).
   const localAmount = (minor, currency, digits = 2) => {
     if (!currency || currency === 'TZS' || !minor) return '';

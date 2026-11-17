@@ -7,13 +7,11 @@ import { profiles } from '../data/profiles.js';
 import { presence } from '../data/presence.js';
 import { loadThread, sendMessage, markRead, onMessage, deleteForMe, searchPeople } from '../data/messages.js';
 import { Sheet } from './sheet.js';
-import { h, icon, ago, avatar, toast } from './dom.js';
+import { h, icon, ago, avatar, formatDateTime, toast } from './dom.js';
 import { calls } from './call-view.js';
 
 const phoneIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1L6.6 10.8z"/></svg>';
 const backIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.4 4.6 14 3.2 5.2 12l8.8 8.8 1.4-1.4L8 12z"/></svg>';
-const time = new Intl.DateTimeFormat(document.documentElement.lang || undefined, { hour: '2-digit', minute: '2-digit' });
-
 /** Avatar with a green dot while that person is active. */
 function presenceAvatar(person, size) {
   const node = h('span', { class: 'presence-avatar', 'data-presence': person.id });
@@ -163,7 +161,7 @@ class ChatSheet {
     const encrypted = Number(row.encryption_version) > 0;
     const bubble = h('div', { class: `msg${mine ? ' mine' : ''}${row.pending ? ' pending' : ''}${row.failed ? ' failed' : ''}`, 'data-id': row.id },
       h('p', {}, encrypted ? `🔒 ${t('encrypted')}` : row.body),
-      h('small', {}, time.format(new Date(row.created_at)), row.edited_at ? ` · ${t('edited')}` : '',
+      h('small', {}, formatDateTime(row.created_at, { hour: '2-digit', minute: '2-digit' }), row.edited_at ? ` · ${t('edited')}` : '',
         mine && last && row.read_at ? ` · ${t('seen')}` : '', row.failed ? ` · ${t('messageFailed')}` : ''));
     if (!row.pending && !row.failed) {
       // Long-press (context menu) or double-tap: "Delete for me".

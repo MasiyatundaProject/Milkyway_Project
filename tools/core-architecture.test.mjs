@@ -4,7 +4,10 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { test } from 'node:test';
 import feed from '../api/milkyway-feed.js';
 import liveRoom from '../api/milkyway-live-room.js';
+import callApi from '../api/milkyway-call.js';
 import livekitToken from '../api/milkyway-livekit-token.js';
+import { runApi } from '../api/_lib/fetch-adapter.js';
+import { closeRoom } from '../api/_lib/livekit.js';
 import { postShareResponse } from '../api/_lib/post-share.js';
 import { assertRoomAccess } from '../milkyway/app/core/livekit-access.js';
 
@@ -739,4 +742,115 @@ test('Cloudflare Pages routes production hosts to the primary custom domain', as
     next: () => new Response('ok'),
   });
   assert.equal(await response.text(), 'ok');
+});
+
+test('Cloudflare API rejects oversized JSON bodies before parsing', async () => {
+  const body = JSON.stringify({ value: 'x'.repeat(16 * 1024) });
+  const response = await runApi('milkyway-health', new Request('https://www.masiyatunda.com/api/milkyway-health', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+  }));
+  assert.equal(response.status, 413);
+  assert.match(response.headers.get('x-request-id') || '', /^[a-z0-9-]{36}$/i);
+});
+
+test('LiveKit cleanup worker consumes the database RPC lease shape and completes the job', async () => {
+  const originalFetch = globalThis.fetch;
+  const previousEnv = Object.fromEntries(['LIVEKIT_URL', 'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET'].map(key => [key, process.env[key]]));
+  const room = 'mw-video-live-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const leaseId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const calls = [];
+  process.env.LIVEKIT_URL = 'wss://live.example.test';
+  process.env.LIVEKIT_API_KEY = 'test-key';
+  process.env.LIVEKIT_API_SECRET = 'test-secret';
+  globalThis.fetch = async address => {
+    calls.push(String(address));
+    return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  const ctx = {
+    async rpc(name, args) {
+      calls.push(`${name}:${JSON.stringify(args)}`);
+      if (name === 'mw_room_cleanup_claim') return [{ job_room_name: room, job_lease_id: leaseId }];
+      return true;
+    },
+  };
+  try {
+    assert.equal(await closeRoom(ctx, room), true);
+    assert.ok(calls.some(call => call === `mw_room_cleanup_complete:${JSON.stringify({ p_room_name: room, p_lease_id: leaseId })}`));
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('expired ringing calls are ended and cannot obtain a LiveKit token', async () => {
+  const originalFetch = globalThis.fetch;
+  const previousEnv = Object.fromEntries(['SUPABASE_URL', 'SUPABASE_ANON_KEY'].map(key => [key, process.env[key]]));
+  const userId = '11111111-1111-4111-8111-111111111111';
+  const callId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const call = {
+    id: callId, caller_id: userId, callee_id: '22222222-2222-4222-8222-222222222222',
+    status: 'ringing', offer: { mode: 'video' }, created_at: new Date(Date.now() - 120000).toISOString(),
+  };
+  const calls = [];
+  process.env.SUPABASE_URL = 'https://unit.supabase.test';
+  process.env.SUPABASE_ANON_KEY = 'test-key';
+  globalThis.fetch = async (address, init = {}) => {
+    const url = String(address);
+    calls.push({ url, method: init.method || 'GET', body: init.body ? JSON.parse(init.body) : null });
+    if (url.endsWith('/auth/v1/user')) return new Response(JSON.stringify({ id: userId }), { status: 200 });
+    if (url.includes('/rpc/mw_room_cleanup_claim')) return new Response('[]', { status: 200 });
+    if (url.includes('/rpc/mw_room_cleanup_enqueue')) return new Response('null', { status: 200 });
+    if (url.includes('/rest/v1/mw_dm_calls?') && init.method === 'PATCH') return new Response('[]', { status: 200 });
+    if (url.includes('/rest/v1/mw_dm_calls?')) return new Response(JSON.stringify([call]), { status: 200 });
+    throw new Error(`Unexpected call-token request: ${url}`);
+  };
+  let status = 200, payload;
+  const response = {
+    headersSent: false,
+    setHeader() { return response; },
+    status(code) { status = code; return response; },
+    json(value) { payload = value; response.headersSent = true; return response; },
+  };
+  try {
+    await callApi({
+      method: 'POST', headers: { authorization: 'Bearer test-token', apikey: 'test-key', 'x-request-id': 'test-request-id' },
+      query: { action: 'token' }, body: { id: callId },
+    }, response);
+    assert.equal(status, 409);
+    assert.match(payload.error, /call has ended/i);
+    const update = calls.find(item => item.method === 'PATCH' && item.url.includes('/rest/v1/mw_dm_calls?'));
+    assert.deepEqual(update.body.answer, { outcome: 'missed' });
+    assert.ok(calls.every(item => !item.url.includes('twirp/livekit.RoomService')));
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('production hardening scopes cleanup leases and uses short locale-aware lifecycle formatting', () => {
+  const migration = readFileSync(new URL('../supabase/migrations/20261126_milkyway_production_hardening.sql', import.meta.url), 'utf8');
+  const liveToken = readFileSync(new URL('../api/milkyway-livekit-token.js', import.meta.url), 'utf8');
+  const edgeToken = readFileSync(new URL('../supabase/functions/_shared/milkyway-token.ts', import.meta.url), 'utf8');
+  const dom = readFileSync(new URL('../milkyway/app/ui/dom.js', import.meta.url), 'utf8');
+  const liveSession = readFileSync(new URL('../milkyway/app/ui/live-session.js', import.meta.url), 'utf8');
+  assert.match(migration, /requested_by uuid not null references auth\.users/);
+  assert.match(migration, /where q\.requested_by = auth\.uid\(\)/);
+  assert.match(migration, /mw_live_room_send_like/);
+  assert.match(migration, /mw_live_room_like_status/);
+  assert.match(liveToken, /ttlSeconds:\s*60/);
+  assert.doesNotMatch(edgeToken, /ttl:\s*'1h'|'10m'/);
+  assert.match(edgeToken, /milkyway-project\.pages\.dev/);
+  assert.match(dom, /Intl\.DateTimeFormat/);
+  assert.match(dom, /Intl\.NumberFormat/);
+  assert.match(dom, /Intl\.RelativeTimeFormat/);
+  assert.match(liveSession, /'like-status'/);
+  assert.match(liveSession, /status\.isLive === false/);
 });

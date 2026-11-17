@@ -14,6 +14,7 @@ import message from '../milkyway-message.js';
 import notifications from '../milkyway-notifications.js';
 import social from '../milkyway-social.js';
 import wallet from '../milkyway-wallet.js';
+import { logError, requestId as getRequestId } from './observability.js';
 
 export const handlers = {
   'milkyway-account': account,
@@ -33,7 +34,35 @@ export const handlers = {
 };
 
 const JSON_LIMIT = 16 * 1024;
-const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+const json = (status, body, id) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Request-Id': id } });
+
+async function readJsonBody(request, id) {
+  const declared = request.headers.get('content-length');
+  if (declared && (!/^\d+$/.test(declared) || Number(declared) > JSON_LIMIT)) {
+    return { response: json(413, { error: 'Request too large.', requestId: id }, id) };
+  }
+  const reader = request.body.getReader();
+  const chunks = [];
+  let length = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > JSON_LIMIT) {
+        await reader.cancel('Request body exceeds limit.');
+        return { response: json(413, { error: 'Request too large.', requestId: id }, id) };
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return { text: new TextDecoder('utf-8', { fatal: true }).decode(bytes) };
+}
 
 function makeResponse() {
   const state = { status: 200, headers: new Headers(), body: null, sent: false };
@@ -54,8 +83,9 @@ function makeResponse() {
 }
 
 export async function runApi(name, request) {
+  const id = getRequestId(request);
   const handler = handlers[name];
-  if (!handler) return json(404, { error: 'Not found.' });
+  if (!handler) return json(404, { error: 'Not found.', requestId: id }, id);
 
   const url = new URL(request.url);
   const headers = Object.fromEntries(request.headers);
@@ -64,9 +94,17 @@ export async function runApi(name, request) {
   let raw = null;
   if (request.method !== 'GET' && request.method !== 'HEAD' && request.body) {
     if (/\bjson\b/i.test(headers['content-type'] || '')) {
-      const text = await request.text();
-      if (text.length > JSON_LIMIT) return json(413, { error: 'Request too large.' });
-      try { body = text ? JSON.parse(text) : undefined; } catch { return json(400, { error: 'Invalid request body.' }); }
+      let text;
+      try {
+        const result = await readJsonBody(request, id);
+        if (result.response) return result.response;
+        text = result.text;
+      } catch (error) {
+        if (error instanceof TypeError || error instanceof RangeError) return json(400, { error: 'Invalid request body.', requestId: id }, id);
+        logError('api.body_read_failed', error, { requestId: id, route: name });
+        return json(400, { error: 'Invalid request body.', requestId: id }, id);
+      }
+      try { body = text ? JSON.parse(text) : undefined; } catch { return json(400, { error: 'Invalid request body.', requestId: id }, id); }
     } else {
       raw = request.body;
     }
@@ -74,15 +112,16 @@ export async function runApi(name, request) {
 
   const { res, state } = makeResponse();
   const req = {
-    method: request.method, headers, query, body, res, url: url.pathname + url.search,
+    method: request.method, headers: { ...headers, 'x-request-id': id }, query, body, res, url: url.pathname + url.search,
     // Multipart uploads read the raw body as a stream, as with a Node request.
     async *[Symbol.asyncIterator]() { if (raw) for await (const chunk of raw) yield chunk; },
   };
+  state.headers.set('X-Request-Id', id);
   try {
     await handler(req, res);
   } catch (error) {
-    console.error(`[api/${name}] unhandled error`, error);
+    logError('api.unhandled', error, { requestId: id, route: name, method: request.method });
   }
-  if (!state.sent) return json(500, { error: 'Service unavailable.' });
+  if (!state.sent) return json(500, { error: 'Service unavailable.', requestId: id }, id);
   return new Response(request.method === 'HEAD' ? null : state.body, { status: state.status, headers: state.headers });
 }

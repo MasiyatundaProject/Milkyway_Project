@@ -2,7 +2,7 @@
 import { t } from '../core/i18n.js';
 import { catalog, wallet, sendGift } from '../data/gifts.js';
 import { Sheet } from './sheet.js';
-import { h, toast } from './dom.js';
+import { formatNumber, h, toast } from './dom.js';
 
 export class GiftTray {
   constructor({ onTopUp } = {}) {
@@ -22,7 +22,7 @@ export class GiftTray {
       h('div', { class: 'gift-head' }, h('span', {}, '🪙 ', this.balance, ' ', t('coins'))),
       this.grid, this.topUpPrompt, this.sendButton);
     catalog.subscribe(items => this.#render(items));
-    wallet.subscribe(value => { this.balance.textContent = String(value?.coins ?? '–'); });
+    wallet.subscribe(value => { this.balance.textContent = value?.coins == null ? '–' : formatNumber(value.coins); });
     this.grid.addEventListener('click', event => {
       const button = event.target.closest('[data-gift]');
       if (button) this.#select(button.dataset.gift);
@@ -43,7 +43,7 @@ export class GiftTray {
   #render(items) {
     this.grid.replaceChildren(...(items || []).map(item =>
       h('button', { class: `gift-item${item.key === this.selectedGift ? ' selected' : ''}`, type: 'button', 'data-gift': item.key, 'aria-pressed': item.key === this.selectedGift ? 'true' : 'false' },
-        h('span', { class: 'gift-icon' }, item.icon), h('small', {}, item.name), h('em', {}, `🪙 ${item.coins}`))));
+        h('span', { class: 'gift-icon' }, item.icon), h('small', {}, item.name), h('em', {}, `🪙 ${formatNumber(item.coins)}`))));
   }
 
   #select(key) {

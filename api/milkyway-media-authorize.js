@@ -3,7 +3,7 @@ import { route, ApiError, requireUuid } from './_lib/supa.js';
 const ROOM = /^mw-conversation-(audio|video)-([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/i;
 
 async function loadCall(ctx, id) {
-  const [call] = await ctx.rest(`mw_dm_calls?id=eq.${id}&select=id,caller_id,callee_id,status,offer&limit=1`) || [];
+  const [call] = await ctx.rest(`mw_dm_calls?id=eq.${id}&select=id,caller_id,callee_id,status,offer,created_at&limit=1`) || [];
   return call || null;
 }
 
@@ -35,6 +35,10 @@ async function authorize({ request, ctx, body }) {
 
   if (action === 'token') {
     if (!['ringing', 'accepted'].includes(call.status)) throw new ApiError(403, 'This call is no longer active.');
+    const ringingAge = Date.now() - Date.parse(call.created_at);
+    if (call.status === 'ringing' && (!Number.isFinite(ringingAge) || ringingAge > 60000)) {
+      throw new ApiError(403, 'This call is no longer active.');
+    }
     return { roomName, identity: me, name: typeof body.name === 'string' ? body.name.slice(0, 80) : undefined, permissions: { canPublish: true, canPublishSources: sources } };
   }
 

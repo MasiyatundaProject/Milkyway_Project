@@ -4,7 +4,7 @@
 // Everything else (calls, conversation rooms) and sites without those settings go through the Supabase
 // livekit-token Edge Function as before.
 import { authenticate } from './_lib/supa.js';
-import { livekitUrl, livekitUsable, accessToken, CAMERA, MIC } from './_lib/livekit.js';
+import { livekitUrl, livekitUsable, accessToken, closeRoom, CAMERA, MIC } from './_lib/livekit.js';
 
 const DEFAULT_SUPABASE_URL = 'https://wpclkhgizbvxuvbhbwzs.supabase.co';
 
@@ -79,7 +79,7 @@ async function liveToken(req, res, body) {
       : [];
     const name = String(profile?.display_name || profile?.username || body.name || 'MilkyWay user').slice(0, 80);
     const token = accessToken({
-      identity: me, name, room, canPublish: sources.length > 0, sources,
+      identity: me, name, room, canPublish: sources.length > 0, sources, ttlSeconds: 60,
       metadata: JSON.stringify({ avatar: String(profile?.avatar_url || '').slice(0, 500) }),
     });
     return res.status(200).json({ contractVersion: 2, token, serverUrl: livekitUrl(), roomName: room, room, service: 'cloudflare' });
@@ -97,14 +97,22 @@ async function callToken(req, res, body) {
   const [, kind, id] = CALL_ROOM.exec(room);
   const me = ctx.user.id;
   try {
-    const [call] = await ctx.rest(`mw_dm_calls?id=eq.${id.toLowerCase()}&select=caller_id,callee_id,status,offer&limit=1`) || [];
+    const [call] = await ctx.rest(`mw_dm_calls?id=eq.${id.toLowerCase()}&select=caller_id,callee_id,status,offer,created_at&limit=1`) || [];
     if (!call || ![call.caller_id, call.callee_id].includes(me)) return res.status(403).json({ error: 'Not allowed.' });
     if (!['ringing', 'accepted'].includes(call.status)) return res.status(403).json({ error: 'This call is no longer active.' });
+    const ringingAge = Date.now() - Date.parse(call.created_at);
+    if (call.status === 'ringing' && (!Number.isFinite(ringingAge) || ringingAge > 60000)) {
+      await ctx.rest(`mw_dm_calls?id=eq.${id.toLowerCase()}&status=eq.ringing`, {
+        method: 'PATCH', body: { status: 'ended', ended_at: new Date().toISOString(), answer: { outcome: 'missed' } },
+      });
+      await closeRoom(ctx, room);
+      return res.status(409).json({ error: 'This call has ended.' });
+    }
     const video = kind.toLowerCase() === 'video';
     if ((call.offer?.mode === 'video') !== video) return res.status(403).json({ error: 'Not allowed.' });
     const [profile] = await ctx.rest(`mw_profiles?id=eq.${me}&select=display_name,username,avatar_url&limit=1`).catch(() => []) || [];
     const token = accessToken({
-      identity: me, room, canPublish: true, sources: video ? [CAMERA, MIC] : [MIC], ttlSeconds: 2 * 3600,
+      identity: me, room, canPublish: true, sources: video ? [CAMERA, MIC] : [MIC], ttlSeconds: 60,
       name: String(profile?.display_name || profile?.username || body.name || 'MilkyWay user').slice(0, 80),
       metadata: JSON.stringify({ avatar: String(profile?.avatar_url || '').slice(0, 500) }),
     });

@@ -125,7 +125,7 @@ export default route({
       p_post: postId ? requireUuid(postId, 'post id') : null,
       p_story: storyId ? requireUuid(storyId, 'story id') : null,
     });
-    return { ok: true, coins: Number(result?.coins ?? 0), earned: Number(result?.earned ?? 0) };
+    return { ok: true, id: result?.id, coins: Number(result?.coins ?? 0), earned: Number(result?.earned ?? 0) };
   },
 
   'redeem-topup-code': async ({ ctx, body }) => {
