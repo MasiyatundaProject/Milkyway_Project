@@ -715,3 +715,28 @@ test('provider keys are configured in one place', () => {
     }
   }
 });
+
+test('Cloudflare Pages routes production hosts to the primary custom domain', async () => {
+  const wrangler = readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
+  const supabase = readFileSync(new URL('../supabase/config.toml', import.meta.url), 'utf8');
+  const homepage = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const middleware = await import('../functions/_middleware.js');
+  assert.match(wrangler, /^name = "milkyway-project"$/m);
+  assert.match(supabase, /site_url = "https:\/\/www\.masiyatunda\.com"/);
+  assert.match(supabase, /"https:\/\/milkyway-project\.pages\.dev\/\*\*"/);
+  assert.match(homepage, /rel="canonical" href="https:\/\/www\.masiyatunda\.com\/"/);
+
+  for (const host of ['masiyatunda.com', 'milkyway-project.pages.dev']) {
+    const response = await middleware.onRequest({
+      request: new Request(`https://${host}/milkyway/?from=old-host`),
+      next: () => { throw new Error('non-canonical host must redirect'); },
+    });
+    assert.equal(response.status, 308);
+    assert.equal(response.headers.get('location'), 'https://www.masiyatunda.com/milkyway/?from=old-host');
+  }
+  const response = await middleware.onRequest({
+    request: new Request('https://www.masiyatunda.com/api/milkyway-health'),
+    next: () => new Response('ok'),
+  });
+  assert.equal(await response.text(), 'ok');
+});

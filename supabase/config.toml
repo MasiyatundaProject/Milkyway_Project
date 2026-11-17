@@ -8,11 +8,14 @@ verify_jwt = true
 # Apply to the hosted project with `supabase config push`, or mirror these values in
 # Dashboard → Authentication → URL Configuration.
 [auth]
-site_url = "https://masiyatunda.com"
+site_url = "https://www.masiyatunda.com"
 additional_redirect_urls = [
+  "https://www.masiyatunda.com",
+  "https://www.masiyatunda.com/**",
   "https://masiyatunda.com",
   "https://masiyatunda.com/**",
-  "https://www.masiyatunda.com/**",
+  "https://milkyway-project.pages.dev",
+  "https://milkyway-project.pages.dev/**",
 ]
 
 # MilkyWay-branded password reset email. Apply with `supabase config push`, or paste the
