@@ -204,6 +204,12 @@ html[data-muted] .mute-toggle .i-sound, html:not([data-muted]) .mute-toggle .i-m
 .progress { position: absolute; inset: auto 0 0; height: 2px; background: rgba(255,255,255,.18); }
 .progress i { display: block; height: 100%; background: rgba(255,255,255,.85); transform-origin: 0 50%; transform: scaleX(0); transition: transform .25s linear; }
 .slide:not([data-type="video"]) .progress { display: none; }
+.video-controls { position: absolute; z-index: 4; inset: auto 70px calc(env(safe-area-inset-bottom) + 70px) 12px; display: grid; grid-template-columns: auto minmax(50px, 1fr) auto auto; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid rgba(255,255,255,.12); border-radius: 14px; background: rgba(5,7,18,.72); backdrop-filter: blur(12px); }
+.video-controls[hidden] { display: none; }
+.video-seek-btn { min-width: 42px; min-height: 34px; padding: 4px 6px; border: 0; border-radius: 9px; background: rgba(255,255,255,.12); color: #fff; font-size: 11px; font-weight: 750; touch-action: manipulation; }
+.video-seek { width: 100%; min-width: 0; height: 28px; margin: 0; accent-color: #bda0ff; touch-action: pan-x; }
+.video-time { min-width: 76px; color: #fff; font-size: 10px; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.slide:not([data-type="video"]) .video-controls { display: none; }
 .burst { position: absolute; z-index: 3; font-size: 96px; color: var(--accent); pointer-events: none; transform: translate(-50%, -50%) rotate(var(--r)); animation: burst .8s var(--ease) forwards; }
 @keyframes burst { 0% { opacity: 0; transform: translate(-50%,-50%) rotate(var(--r)) scale(.4); } 18% { opacity: 1; transform: translate(-50%,-50%) rotate(var(--r)) scale(1.15); }
   60% { opacity: 1; transform: translate(-50%,-60%) rotate(var(--r)) scale(1); } 100% { opacity: 0; transform: translate(-50%,-140%) rotate(var(--r)) scale(1.3); } }
@@ -609,9 +615,10 @@ html[data-low-end] .create-orb, html[data-low-end] .gift-card, html[data-low-end
 .pv-layer.open { opacity: 1; }
 .pv-frame { position: relative; flex: 1; min-height: 0; display: grid; place-items: center; overflow: hidden; }
 .pv-media { position: absolute; inset: 0; display: grid; place-items: center; perspective: 1100px; touch-action: pan-y; }
+.pv-media.has-image { touch-action: none; }
 /* Photos and videos fill the popup and scale to fit (never cropped, never larger than the screen). */
 .pv-media img, .pv-media video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; user-select: none; -webkit-user-drag: none; }
-.pv-media img { cursor: zoom-in; }
+.pv-media img { cursor: zoom-in; transform-origin: center; }
 .pv-image { backface-visibility: hidden; will-change: transform, opacity; }
 .pv-image-fade { animation: pvFade .3s ease both; }
 .pv-image-zoom { animation: pvZoom .4s ease both; }
@@ -635,8 +642,8 @@ html[data-low-end] .create-orb, html[data-low-end] .gift-card, html[data-low-end
 .slideshow-badge { position: absolute; z-index: 2; top: calc(env(safe-area-inset-top) + 10px); right: 12px; padding: 5px 9px; border-radius: 99px; background: rgba(0,0,0,.62); font-size: 13px; }
 .pv-media.loading::before { content: ""; width: 34px; height: 34px; border-radius: 50%; border: 3px solid rgba(255,255,255,.18); border-top-color: var(--accent); animation: pvSpin .8s linear infinite; }
 @keyframes pvSpin { to { transform: rotate(360deg); } }
-.pv-media.zoomed { display: block; overflow: auto; touch-action: pan-x pan-y; overscroll-behavior: contain; }
-.pv-media.zoomed img { position: static; width: auto; height: auto; max-width: none; max-height: none; margin: auto; cursor: zoom-out; }
+.pv-media.zoomed { overflow: hidden; touch-action: none; overscroll-behavior: contain; }
+.pv-media.zoomed img { cursor: zoom-out; }
 .pv-text { padding: 32px 28px; max-width: 560px; font-size: clamp(20px, 5.4vw, 28px); font-weight: 700; line-height: 1.3; text-align: center; white-space: pre-wrap; overflow-wrap: anywhere; }
 .pv-close { position: absolute; z-index: 3; top: calc(env(safe-area-inset-top) + 10px); right: 10px; background: rgba(0,0,0,.45); }
 .pv-nav { position: absolute; z-index: 3; top: 50%; transform: translateY(-50%); background: rgba(0,0,0,.4); font-size: 30px; line-height: 1; }

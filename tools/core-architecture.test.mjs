@@ -367,6 +367,22 @@ test('LIVE and DM calls keep LiveKit default ICE and retry only in their assigne
   assert.doesNotMatch(liveSession + callView, /iceServers\s*:/);
 });
 
+test('video feed has seek controls and post photos support pointer pinch zoom', () => {
+  const feed = readFileSync(new URL('../milkyway/app/ui/feed-view.js', import.meta.url), 'utf8');
+  const viewer = readFileSync(new URL('../milkyway/app/ui/post-viewer.js', import.meta.url), 'utf8');
+  const styles = readFileSync(new URL('../milkyway/app/app.css', import.meta.url), 'utf8');
+  assert.match(feed, /class: 'video-seek', type: 'range'/);
+  assert.match(feed, /video\.currentTime = video\.duration \* Number\(seek\.value\) \/ 1000/);
+  assert.match(feed, /currentTime \+ seconds/);
+  assert.match(styles, /\.video-controls/);
+  assert.match(viewer, /pointerdown/);
+  assert.match(viewer, /this\.#pointerDistance\(\)/);
+  assert.match(viewer, /Math\.min\(4,/);
+  assert.match(viewer, /this\.image\.style\.scale/);
+  assert.match(viewer, /this\.image\.style\.translate/);
+  assert.match(styles, /\.pv-media\.has-image \{ touch-action: none; \}/);
+});
+
 test('LIVE guest stage grants publisher permissions and renders allocated guest seats', () => {
   const roomApi = readFileSync(new URL('../api/milkyway-live-room.js', import.meta.url), 'utf8');
   const tokenApi = readFileSync(new URL('../api/milkyway-livekit-token.js', import.meta.url), 'utf8');

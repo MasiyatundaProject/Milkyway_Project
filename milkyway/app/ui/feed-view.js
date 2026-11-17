@@ -163,6 +163,32 @@ export class FeedView {
     const name = h('button', { class: 'meta-name', type: 'button', 'data-act': 'profile' });
     const caption = h('p', { class: 'meta-caption', 'data-act': 'caption' });
     const bar = h('i');
+    const seek = h('input', { class: 'video-seek', type: 'range', min: '0', max: '1000', step: '1', value: '0', 'aria-label': 'Seek video' });
+    const time = h('span', { class: 'video-time', 'aria-live': 'off' }, '0:00 / 0:00');
+    const seekBy = (seconds, label) => h('button', {
+      class: 'video-seek-btn', type: 'button', 'aria-label': label,
+      onclick: event => { event.stopPropagation(); if (Number.isFinite(video.duration)) video.currentTime = Math.max(0, Math.min(video.duration, video.currentTime + seconds)); },
+    }, seconds < 0 ? '−10' : '+10');
+    const videoControls = h('div', { class: 'video-controls', 'data-act': 'video-controls' },
+      seekBy(-10, 'Rewind 10 seconds'), seek, seekBy(10, 'Forward 10 seconds'), time);
+    const stopSeekPropagation = event => event.stopPropagation();
+    for (const type of ['pointerdown', 'pointerup', 'touchstart', 'touchend', 'click']) videoControls.addEventListener(type, stopSeekPropagation);
+    seek.addEventListener('input', () => {
+      if (Number.isFinite(video.duration) && video.duration > 0) video.currentTime = video.duration * Number(seek.value) / 1000;
+    });
+    const formatTime = seconds => {
+      if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+      const whole = Math.floor(seconds);
+      return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+    };
+    const updateSeek = () => {
+      const duration = Number.isFinite(video.duration) ? video.duration : 0;
+      if (document.activeElement !== seek) seek.value = duration ? String(Math.round(video.currentTime / duration * 1000)) : '0';
+      time.textContent = `${formatTime(video.currentTime)} / ${formatTime(duration)}`;
+      seek.setAttribute('aria-valuetext', `${formatTime(video.currentTime)} of ${formatTime(duration)}`);
+      seek.disabled = !duration;
+    };
+    for (const type of ['loadedmetadata', 'durationchange', 'timeupdate', 'seeked']) video.addEventListener(type, updateSeek);
     // Sponsored label + call to action (ads) and the "Suggested for you" card; hidden on normal posts.
     const adBar = h('div', { class: 'ad-bar', hidden: true },
       h('div', { class: 'ad-line' }, h('span', { class: 'ad-tag' }, t('sponsored') === 'sponsored' ? 'Sponsored' : t('sponsored')),
@@ -173,8 +199,8 @@ export class FeedView {
       media, brandMark(), h('div', { class: 'shade', 'aria-hidden': 'true' }),
       h('aside', { class: 'rail' }, h('div', { class: 'rail-author', 'data-act': 'profile' }, avatarNode, follow), like, comment, save, gift, share),
       h('div', { class: 'meta' }, name, caption, adBar), suggest,
-      h('div', { class: 'progress', 'aria-hidden': 'true' }, bar));
-    slide._refs = { video, img, text, paused, missing, slideshowBadge, avatarNode, follow, like, comment, save, gift, share, name, caption, bar, adBar, suggest };
+      videoControls, h('div', { class: 'progress', 'aria-hidden': 'true' }, bar));
+    slide._refs = { video, img, text, paused, missing, slideshowBadge, avatarNode, follow, like, comment, save, gift, share, name, caption, bar, videoControls, seek, time, adBar, suggest };
     // Portrait media fills the screen; landscape media is letterboxed instead of cropped.
     const fit = (w, h) => { if (w && h) slide.dataset.fit = h >= w * 1.2 ? 'cover' : 'contain'; };
     video.addEventListener('loadedmetadata', () => fit(video.videoWidth, video.videoHeight));
@@ -204,6 +230,10 @@ export class FeedView {
     r.img.hidden = type !== 'image';
     r.text.hidden = type !== 'text';
     r.paused.hidden = true;
+    r.videoControls.hidden = type !== 'video';
+    r.seek.value = '0';
+    r.seek.disabled = true;
+    r.time.textContent = '0:00 / 0:00';
     r.missing.hidden = true;
     r.slideshowBadge.hidden = (post.media?.items?.length || post.media_items?.length || 0) < 2;
     r.slideshowBadge.textContent = `▧ ${post.media?.items?.length || post.media_items?.length || 0}`;

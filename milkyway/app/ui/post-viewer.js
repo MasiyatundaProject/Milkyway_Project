@@ -58,19 +58,98 @@ export class PostViewer {
       else if (event.key === 'ArrowRight') this.step(1);
     });
     let startX = null, startY = null;
-    this.stage.addEventListener('pointerdown', event => { startX = event.clientX; startY = event.clientY; });
-    this.stage.addEventListener('pointerup', event => {
+    this.pointers = new Map();
+    this.stage.addEventListener('pointerdown', event => {
+      this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      this.stage.setPointerCapture?.(event.pointerId);
+      if (this.pointers.size > 1 && this.image) {
+        const center = this.#pointerCenter();
+        this.pinchStart = {
+          distance: this.#pointerDistance(),
+          scale: this.imageScale || 1,
+          x: this.imageTranslateX || 0,
+          y: this.imageTranslateY || 0,
+          centerX: center.x,
+          centerY: center.y,
+        };
+        this.swiped = true;
+        event.preventDefault();
+        return;
+      }
+      startX = event.clientX; startY = event.clientY;
+    });
+    this.stage.addEventListener('pointermove', event => {
+      if (!this.pointers.has(event.pointerId)) return;
+      this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (this.pinchStart && this.image) {
+        const ratio = this.#pointerDistance() / Math.max(1, this.pinchStart.distance);
+        this.imageScale = Math.max(1, Math.min(4, this.pinchStart.scale * ratio));
+        if (this.imageScale <= 1) {
+          this.imageTranslateX = 0;
+          this.imageTranslateY = 0;
+        } else {
+          const center = this.#pointerCenter();
+          this.imageTranslateX = this.pinchStart.x + center.x - this.pinchStart.centerX;
+          this.imageTranslateY = this.pinchStart.y + center.y - this.pinchStart.centerY;
+        }
+        this.#paintImageTransform();
+        event.preventDefault();
+      } else if (this.pointers.size === 1 && this.imageScale > 1 && this.image) {
+        const point = this.pointers.get(event.pointerId);
+        this.imageTranslateX += point.x - (point.previousX ?? point.x);
+        this.imageTranslateY += point.y - (point.previousY ?? point.y);
+        point.previousX = point.x;
+        point.previousY = point.y;
+        this.#paintImageTransform();
+        event.preventDefault();
+      }
+    });
+    const endPointer = event => {
+      const pinching = !!this.pinchStart;
+      this.pointers.delete(event.pointerId);
+      if (this.pointers.size < 2) this.pinchStart = null;
+      if (pinching || this.imageScale > 1) {
+        startX = null;
+        this.swiped = true;
+        return;
+      }
       if (startX == null) return;
       const dx = event.clientX - startX, dy = event.clientY - startY;
       startX = null;
       this.swiped = Math.abs(dx) > 10 || Math.abs(dy) > 10;
-      if (this.stage.classList.contains('zoomed')) return; // panning a zoomed photo
+      if (this.stage.classList.contains('zoomed')) return;
       if (Math.abs(dx) > SWIPE_PX && Math.abs(dx) > Math.abs(dy)) {
         if (this.post && postKind(this.post) === 'image' && photoItems(this.post).length > 1) this.#stepImage(dx < 0 ? 1 : -1);
         else this.step(dx < 0 ? 1 : -1);
       }
       else if (dy > SWIPE_PX * 1.5 && Math.abs(dy) > Math.abs(dx)) this.close();
-    });
+    };
+    this.stage.addEventListener('pointerup', endPointer);
+    this.stage.addEventListener('pointercancel', endPointer);
+  }
+
+  #pointerDistance() {
+    const [first, second] = [...this.pointers.values()];
+    return first && second ? Math.hypot(first.x - second.x, first.y - second.y) : 0;
+  }
+
+  #pointerCenter() {
+    const points = [...this.pointers.values()];
+    return points.length > 1
+      ? { x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2 }
+      : points[0] || { x: 0, y: 0 };
+  }
+
+  #paintImageTransform() {
+    if (!this.image) return;
+    const bounds = this.stage.getBoundingClientRect();
+    const maxX = bounds.width * (this.imageScale - 1) / 2;
+    const maxY = bounds.height * (this.imageScale - 1) / 2;
+    this.imageTranslateX = Math.max(-maxX, Math.min(maxX, this.imageTranslateX || 0));
+    this.imageTranslateY = Math.max(-maxY, Math.min(maxY, this.imageTranslateY || 0));
+    this.image.style.translate = `${this.imageTranslateX || 0}px ${this.imageTranslateY || 0}px`;
+    this.image.style.scale = String(this.imageScale || 1);
+    this.stage.classList.toggle('zoomed', this.imageScale > 1);
   }
 
   get isOpen() { return !this.root.hidden; }
@@ -96,8 +175,14 @@ export class PostViewer {
     this.root.classList.remove('open');
     this.root.hidden = true;
     this.stage.replaceChildren();
+    this.image = null;
+    this.imageScale = 1;
+    this.imageTranslateX = 0;
+    this.imageTranslateY = 0;
+    this.pointers.clear();
     this.sound.replaceChildren();
     this.stage.classList.remove('zoomed', 'loading');
+    this.stage.classList.remove('has-image');
     this.returnFocus?.focus?.({ preventScroll: true });
     const done = this.onClose;
     this.onClose = null;
@@ -115,6 +200,12 @@ export class PostViewer {
     this.#stopSlideshow();
     this.#clearImagePreloads();
     this.stage.classList.remove('zoomed', 'loading');
+    this.stage.classList.remove('has-image');
+    this.image = null;
+    this.imageScale = 1;
+    this.imageTranslateX = 0;
+    this.imageTranslateY = 0;
+    this.pointers.clear();
     this.index = index;
     const post = this.post = this.posts[index];
     const kind = postKind(post);
@@ -164,6 +255,7 @@ export class PostViewer {
     if (!url) return;
     this.imageIndex = index;
     const img = h('img', { class: `pv-image pv-image-${this.root.dataset.style || 'fade'}`, alt: post.caption || '', decoding: 'async', draggable: 'false', fetchpriority: 'high' });
+    this.image = img;
     const preview = photoPreviewItems(post)[index] || url;
     const progressive = preview !== url;
     const controls = [];
@@ -180,6 +272,7 @@ export class PostViewer {
     const showMissing = () => {
       if (this.post !== post || this.imageIndex !== index) return;
       this.stage.classList.remove('loading');
+      this.image = null;
       this.stage.replaceChildren(mediaPlaceholder(t('imageUnavailable')));
     };
     const loadFull = () => {
@@ -203,7 +296,17 @@ export class PostViewer {
       quality: progressive ? 65 : device.saveData ? 72 : 82,
       onFail: progressive ? loadFull : showMissing,
     });
-    img.addEventListener('click', () => { if (!this.swiped) this.stage.classList.toggle('zoomed'); });
+    img.addEventListener('click', () => {
+      if (this.swiped) return;
+      this.imageScale = this.imageScale > 1 ? 1 : 2;
+      if (this.imageScale === 1) this.imageTranslateX = this.imageTranslateY = 0;
+      this.#paintImageTransform();
+    });
+    this.imageScale = 1;
+    this.imageTranslateX = 0;
+    this.imageTranslateY = 0;
+    this.stage.classList.remove('zoomed');
+    this.stage.classList.add('has-image');
     this.stage.replaceChildren(img, ...controls);
   }
 
