@@ -9,6 +9,16 @@
 
 const envSupabaseUrl = import.meta.env?.VITE_SUPABASE_URL;
 
+function normalizeSupabaseUrl(value) {
+  let address;
+  try { address = new URL(value); }
+  catch { throw new Error('Supabase URL is invalid; configure a plain HTTPS origin without quotes or brackets.'); }
+  if (address.protocol !== 'https:' || !address.hostname || address.username || address.password || address.pathname !== '/' || address.search || address.hash) {
+    throw new Error('Supabase URL must be an HTTPS origin without credentials, path, query, or fragment.');
+  }
+  return address.origin;
+}
+
 const defaults = {
   supabase: {
     url: envSupabaseUrl || 'https://wpclkhgizbvxuvbhbwzs.supabase.co',
@@ -61,8 +71,9 @@ const merge = (base, extra) => {
 };
 
 const resolved = merge(defaults, globalThis.MW_CONFIG);
+resolved.supabase.url = normalizeSupabaseUrl(String(resolved.supabase.url || ''));
 if (!globalThis.MW_CONFIG?.livekit?.directTokenEndpoint) {
-  resolved.livekit.directTokenEndpoint = `${String(resolved.supabase.url).replace(/\/+$/, '')}/functions/v1/livekit-token`;
+  resolved.livekit.directTokenEndpoint = `${resolved.supabase.url}/functions/v1/livekit-token`;
 }
 
 export const config = Object.freeze(resolved);

@@ -8,6 +8,18 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const out = join(root, 'dist');
 const blocked = /\.(sql|bak|md|txt|map|gradle|java|ts)$/i;
 const maxBytes = 25 * 1024 * 1024; // Cloudflare Pages per-file limit
+const configuredSupabaseUrl = process.env.VITE_SUPABASE_URL?.trim() || process.env.SUPABASE_URL?.trim() || '';
+let buildSupabaseUrl = '';
+
+if (configuredSupabaseUrl) {
+  let address;
+  try { address = new URL(configuredSupabaseUrl); }
+  catch { throw new Error('Invalid VITE_SUPABASE_URL or SUPABASE_URL; provide a plain HTTPS origin without quotes or brackets.'); }
+  if (address.protocol !== 'https:' || !address.hostname || address.username || address.password || address.pathname !== '/' || address.search || address.hash) {
+    throw new Error('Invalid VITE_SUPABASE_URL or SUPABASE_URL; expected an HTTPS origin without credentials, path, query, or fragment.');
+  }
+  buildSupabaseUrl = address.origin;
+}
 
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
@@ -26,15 +38,10 @@ for (const folder of ['img', 'slides', 'milkyway']) {
   if (existsSync(join(root, folder))) cpSync(join(root, folder), join(out, folder), { recursive: true, filter });
 }
 
-const buildSupabaseUrl = process.env.VITE_SUPABASE_URL?.trim();
 if (buildSupabaseUrl) {
-  const address = new URL(buildSupabaseUrl);
-  if (address.protocol !== 'https:' || address.username || address.password || address.pathname !== '/' || address.search || address.hash) {
-    throw new Error('VITE_SUPABASE_URL must be an HTTPS origin without credentials, path, query, or fragment.');
-  }
   const appIndex = join(out, 'milkyway', 'index.html');
   const html = readFileSync(appIndex, 'utf8');
-  const config = JSON.stringify(buildSupabaseUrl.replace(/\/+$/, '')).replace(/</g, '\\u003c');
+  const config = JSON.stringify(buildSupabaseUrl).replace(/</g, '\\u003c');
   const injection = `<script>window.MW_CONFIG={...(window.MW_CONFIG||{}),supabase:{...(window.MW_CONFIG?.supabase||{}),url:${config}}};</script>\n`;
   writeFileSync(appIndex, html.replace('<!-- Optional provider overrides', `${injection}<!-- Optional provider overrides`));
 }

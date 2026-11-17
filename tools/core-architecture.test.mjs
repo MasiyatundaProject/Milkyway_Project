@@ -722,19 +722,32 @@ test('provider keys are configured in one place', () => {
 });
 
 test('Supabase URL environment is used by browser builds and server handlers', () => {
+  const appConfig = readFileSync(new URL('../milkyway/app/config.js', import.meta.url), 'utf8');
   const build = readFileSync(new URL('../tools/build-cloudflare.mjs', import.meta.url), 'utf8');
   const adapter = readFileSync(new URL('../api/_lib/supa.js', import.meta.url), 'utf8');
   const edge = readFileSync(new URL('../supabase/functions/_shared/milkyway-token.ts', import.meta.url), 'utf8');
   const serviceWorker = readFileSync(new URL('../milkyway/sw.js', import.meta.url), 'utf8');
   const moderation = readFileSync(new URL('../milkyway/moderation.html', import.meta.url), 'utf8');
   assert.match(build, /process\.env\.VITE_SUPABASE_URL/);
+  assert.match(build, /process\.env\.SUPABASE_URL/);
+  assert.match(build, /without quotes or brackets/);
   assert.match(build, /window\.MW_CONFIG/);
   assert.match(adapter, /'VITE_SUPABASE_URL'/);
   assert.match(edge, /Deno\.env\.get\('VITE_SUPABASE_URL'\)/);
+  assert.match(appConfig, /normalizeSupabaseUrl/);
   assert.match(serviceWorker, /isPublicStorageUrl/);
   assert.doesNotMatch(serviceWorker, /wpclkhgizbvxuvbhbwzs\.supabase\.co/);
   assert.match(moderation, /createClient\(config\.supabase\.url,config\.supabase\.anonKey\)/);
   assert.doesNotMatch(moderation, /wpclkhgizbvxuvbhbwzs\.supabase\.co/);
+});
+
+test('Cloudflare build accepts configured Supabase origin and rejects malformed URL before cleaning dist', () => {
+  const buildPath = new URL('../tools/build-cloudflare.mjs', import.meta.url);
+  const source = readFileSync(buildPath, 'utf8');
+  assert.ok(source.indexOf('configuredSupabaseUrl') < source.indexOf('rmSync(out'));
+  assert.match(source, /process\.env\.VITE_SUPABASE_URL\?\.trim\(\) \|\| process\.env\.SUPABASE_URL/);
+  assert.match(source, /new URL\(configuredSupabaseUrl\)/);
+  assert.match(source, /plain HTTPS origin without quotes or brackets/);
 });
 
 test('Cloudflare Pages routes production hosts to the primary custom domain', async () => {
