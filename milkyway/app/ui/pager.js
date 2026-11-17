@@ -138,7 +138,7 @@ export class VerticalPager {
     let locked = null; // 'y' | 'x'
     let frame = 0;
 
-    const blocked = target => target.closest?.('[data-no-swipe], input, textarea, select');
+    const blocked = target => target.closest?.('[data-no-swipe], .image-zoomed, input, textarea, select');
     const paint = () => {
       frame = 0;
       this.track.style.transform = `translate3d(0,${-this.index * this.height + this.offset}px,0)`;
@@ -146,6 +146,7 @@ export class VerticalPager {
 
     root.addEventListener('pointerdown', event => {
       if (event.pointerType === 'mouse' && event.button !== 0) return;
+      if (event.isPrimary === false) { start = null; locked = null; return; }
       if (blocked(event.target) || this.items.length < 2) return;
       start = { x: event.clientX, y: event.clientY, id: event.pointerId };
       samples = [{ y: event.clientY, t: event.timeStamp }];

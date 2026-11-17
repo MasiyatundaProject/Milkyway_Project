@@ -36,6 +36,7 @@ create policy mw_creator_services_owner on public.mw_creator_services for all to
   using (creator_id = (select auth.uid()))
   with check (creator_id = (select auth.uid()));
 
+grant usage on schema public to anon, authenticated;
 grant select on public.mw_creator_services to anon, authenticated;
 grant insert, update, delete on public.mw_creator_services to authenticated;
 

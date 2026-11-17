@@ -44,6 +44,7 @@ test('creator service cache repair and push delivery cover post and incoming-cal
   const pushClient = readFileSync(new URL('../milkyway/app/core/push.js', import.meta.url), 'utf8');
   const pushApi = readFileSync(new URL('../api/fcm.js', import.meta.url), 'utf8');
   assert.match(creatorMigration, /alter table public\.mw_creator_services[\s\S]*notify pgrst, 'reload schema'/i);
+  assert.match(creatorMigration, /grant usage on schema public to anon, authenticated/i);
   assert.match(creatorMigration, /grant select on public\.mw_creator_services to anon, authenticated/i);
   assert.match(pushMigration, /vault\.decrypted_secrets/);
   assert.match(pushMigration, /mw_post_notifications_push/);
@@ -367,14 +368,22 @@ test('LIVE and DM calls keep LiveKit default ICE and retry only in their assigne
   assert.doesNotMatch(liveSession + callView, /iceServers\s*:/);
 });
 
-test('video feed has seek controls and post photos support pointer pinch zoom', () => {
+test('feed videos use tap-to-show scrubbers and post photos pinch to zoom', () => {
   const feed = readFileSync(new URL('../milkyway/app/ui/feed-view.js', import.meta.url), 'utf8');
   const viewer = readFileSync(new URL('../milkyway/app/ui/post-viewer.js', import.meta.url), 'utf8');
+  const pager = readFileSync(new URL('../milkyway/app/ui/pager.js', import.meta.url), 'utf8');
   const styles = readFileSync(new URL('../milkyway/app/app.css', import.meta.url), 'utf8');
   assert.match(feed, /class: 'video-seek', type: 'range'/);
   assert.match(feed, /video\.currentTime = video\.duration \* Number\(seek\.value\) \/ 1000/);
-  assert.match(feed, /currentTime \+ seconds/);
-  assert.match(styles, /\.video-controls/);
+  assert.match(feed, /this\.#showVideoControls\(slide\)/);
+  assert.match(feed, /}, 2600\)/);
+  assert.doesNotMatch(feed, /video-seek-btn|currentTime \+ seconds/);
+  assert.match(styles, /\.slide\.controls-visible \.video-controls/);
+  assert.doesNotMatch(styles, /\.video-controls \{[^}]*backdrop-filter/);
+  assert.match(feed, /media\.addEventListener\('pointerdown'/);
+  assert.match(feed, /Math\.min\(4, imagePinch\.scale/);
+  assert.match(pager, /event\.isPrimary === false/);
+  assert.match(pager, /\.image-zoomed/);
   assert.match(viewer, /pointerdown/);
   assert.match(viewer, /this\.#pointerDistance\(\)/);
   assert.match(viewer, /Math\.min\(4,/);
@@ -572,6 +581,10 @@ test('homepage APK download is a native static-file link', () => {
   assert.doesNotMatch(html, /apk-link\.js/);
   const build = readFileSync(new URL('./build-cloudflare.mjs', import.meta.url), 'utf8');
   assert.match(build, /copyFileSync\(join\(downloads, 'MilkyWay\.apk'\), join\(out, 'MilkyWay\.apk'\)\)/);
+  assert.match(build, /url: versionedApkUrl, apk: versionedApkUrl/);
+  assert.match(build, /const homepage = join\(out, 'index\.html'\)/);
+  assert.match(build, /versionedApkUrl\}"/);
+  assert.match(build, /Accept-Ranges: bytes/);
   assert.match(build, /\/MilkyWay\.apk\n  Content-Type: application\/vnd\.android\.package-archive\n  Content-Disposition: attachment; filename="MilkyWay\.apk"\n  Accept-Ranges: bytes\n  Cache-Control: no-cache, no-transform/);
   const server = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
   assert.match(server, /app\.get\('\/MilkyWay\.apk'.*sendFile/);

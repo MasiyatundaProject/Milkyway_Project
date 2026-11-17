@@ -459,6 +459,7 @@ select public.mw_repair_add('mw_creator_services', 'is_published', 'boolean not 
 select public.mw_repair_add('mw_creator_services', 'created_at', 'timestamptz not null default now()', 'timestamptz not null default now()');
 select public.mw_repair_add('mw_creator_services', 'updated_at', 'timestamptz not null default now()', 'timestamptz not null default now()');
 select public.mw_repair_key('mw_creator_services', array['id']);
+select public.mw_repair_key('mw_creator_services', array['id']);
 -- mw_service_inquiries
 select public.mw_repair_add('mw_service_inquiries', 'id', 'uuid default gen_random_uuid()', 'uuid default gen_random_uuid()');
 select public.mw_repair_add('mw_service_inquiries', 'service_id', 'uuid references public.mw_creator_services(id) on delete set null', 'uuid');
@@ -499,6 +500,12 @@ select public.mw_repair_add('mw_live_room_likes', 'user_id', 'uuid references au
 select public.mw_repair_add('mw_live_room_likes', 'like_count', 'smallint', 'smallint');
 select public.mw_repair_add('mw_live_room_likes', 'created_at', 'timestamptz not null default now()', 'timestamptz not null default now()');
 select public.mw_repair_key('mw_live_room_likes', array['id']);
+-- mw_fcm_devices
+select public.mw_repair_add('mw_fcm_devices', 'token', 'text', 'text');
+select public.mw_repair_add('mw_fcm_devices', 'user_id', 'uuid references auth.users(id) on delete cascade', 'uuid');
+select public.mw_repair_add('mw_fcm_devices', 'platform', 'text not null default ''android''', 'text not null default ''android''');
+select public.mw_repair_add('mw_fcm_devices', 'updated_at', 'timestamptz not null default now()', 'timestamptz not null default now()');
+select public.mw_repair_key('mw_fcm_devices', array['token']);
 
 -- ---------------------------------------------------------------------------------------------------------------
 -- 3. Carry legacy data over and stop legacy NOT NULL columns from blocking new rows
@@ -553,6 +560,7 @@ select public.mw_repair_relax('mw_creator_pins', array['creator_id', 'post_id', 
 select public.mw_repair_relax('mw_post_views', array['post_id', 'viewer_id', 'viewed_at']);
 select public.mw_repair_relax('mw_room_cleanup_queue', array['room_name', 'requested_by', 'requested_at', 'attempts', 'next_attempt_at', 'lease_id', 'lease_until', 'last_error']);
 select public.mw_repair_relax('mw_live_room_likes', array['id', 'room_name', 'user_id', 'like_count', 'created_at']);
+select public.mw_repair_relax('mw_fcm_devices', array['token', 'user_id', 'platform', 'updated_at']);
 
 -- ===============================================================================================================
 -- supabase/migrations/20261001_milkyway_dm_core.sql
@@ -3916,10 +3924,22 @@ revoke all on function public.mw_live_room_gift_status(uuid, text, uuid) from pu
 grant execute on function public.mw_live_room_gift_status(uuid, text, uuid) to authenticated;
 notify pgrst, 'reload schema';
 
--- ---------------------------------------------------------------------------------------------------------------
--- 5. Final hardening and cleanup
--- ---------------------------------------------------------------------------------------------------------------
--- Repair Creator Studio columns even when the original table was only partially created.
+-- ===============================================================================================================
+-- supabase/migrations/20261127_milkyway_creator_services_schema_cache.sql
+-- ===============================================================================================================
+-- Repair deployments where Creator Studio table creation was skipped or partially applied.
+create table if not exists public.mw_creator_services (
+  id uuid primary key default gen_random_uuid(),
+  creator_id uuid not null references auth.users(id) on delete cascade,
+  title text not null check (char_length(title) between 2 and 80),
+  category text not null check (char_length(category) between 2 and 60),
+  description text not null check (char_length(description) between 10 and 1000),
+  pricing text not null default '' check (char_length(pricing) <= 100),
+  is_published boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 alter table public.mw_creator_services
   add column if not exists id uuid default gen_random_uuid(),
   add column if not exists creator_id uuid references auth.users(id) on delete cascade,
@@ -3930,8 +3950,10 @@ alter table public.mw_creator_services
   add column if not exists is_published boolean not null default true,
   add column if not exists created_at timestamptz not null default now(),
   add column if not exists updated_at timestamptz not null default now();
+
 create index if not exists mw_creator_services_public_idx
   on public.mw_creator_services (creator_id, created_at desc) where is_published;
+
 alter table public.mw_creator_services enable row level security;
 drop policy if exists mw_creator_services_read on public.mw_creator_services;
 create policy mw_creator_services_read on public.mw_creator_services for select to anon, authenticated
@@ -3940,12 +3962,19 @@ drop policy if exists mw_creator_services_owner on public.mw_creator_services;
 create policy mw_creator_services_owner on public.mw_creator_services for all to authenticated
   using (creator_id = (select auth.uid()))
   with check (creator_id = (select auth.uid()));
+
+grant usage on schema public to anon, authenticated;
 grant select on public.mw_creator_services to anon, authenticated;
 grant insert, update, delete on public.mw_creator_services to authenticated;
+notify pgrst, 'reload schema';
 
--- Push devices and delivery use server credentials and a secret stored in Supabase Vault.
+-- ===============================================================================================================
+-- supabase/migrations/20261127_milkyway_push_delivery.sql
+-- ===============================================================================================================
+-- Native FCM devices and server-side push relay for posts and incoming calls.
 create extension if not exists pg_net;
 create extension if not exists supabase_vault with schema vault;
+
 do $$
 begin
   if to_regclass('public.mw_messages') is not null then
@@ -3957,6 +3986,7 @@ begin
 end;
 $$;
 drop function if exists public.mw_fcm_relay();
+
 create table if not exists public.mw_fcm_devices (
   token text primary key,
   user_id uuid not null references auth.users(id) on delete cascade,
@@ -3973,8 +4003,13 @@ create policy mw_fcm_devices_owner on public.mw_fcm_devices for all to authentic
   with check (user_id = (select auth.uid()));
 
 create or replace function public.mw_fcm_device_register(p_token text, p_platform text default 'android')
-returns void language plpgsql security definer set search_path = '' as $$
-declare me uuid := auth.uid();
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  me uuid := auth.uid();
 begin
   if me is null then raise exception 'Sign in first.' using errcode = '28000'; end if;
   if char_length(coalesce(p_token, '')) not between 20 and 4096
@@ -3983,61 +4018,102 @@ begin
   end if;
   insert into public.mw_fcm_devices(token, user_id, platform, updated_at)
   values (p_token, me, p_platform, now())
-  on conflict (token) do update set user_id = excluded.user_id, platform = excluded.platform, updated_at = excluded.updated_at;
+  on conflict (token) do update set
+    user_id = excluded.user_id,
+    platform = excluded.platform,
+    updated_at = excluded.updated_at;
 end;
 $$;
 revoke all on function public.mw_fcm_device_register(text, text) from public, anon;
 grant execute on function public.mw_fcm_device_register(text, text) to authenticated;
 
+-- A browser push endpoint belongs to one signed-in account on this browser profile.
 delete from public.mw_push_subscriptions older
 using public.mw_push_subscriptions newer
 where older.endpoint = newer.endpoint
   and (older.created_at, older.id) < (newer.created_at, newer.id);
-create unique index if not exists mw_push_subscriptions_endpoint_key on public.mw_push_subscriptions (endpoint);
+create unique index if not exists mw_push_subscriptions_endpoint_key
+  on public.mw_push_subscriptions (endpoint);
+
 create or replace function public.mw_push_subscription_register(p_endpoint text, p_p256dh text, p_auth text)
-returns void language plpgsql security definer set search_path = '' as $$
-declare me uuid := auth.uid();
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  me uuid := auth.uid();
 begin
   if me is null then raise exception 'Sign in first.' using errcode = '28000'; end if;
-  if p_endpoint !~ '^https://[^[:space:]]+$' or char_length(p_endpoint) > 2048
+  if p_endpoint !~ '^https://[^[:space:]]+$'
+    or char_length(p_endpoint) > 2048
     or char_length(coalesce(p_p256dh, '')) not between 1 and 256
     or char_length(coalesce(p_auth, '')) not between 1 and 256 then
     raise exception 'Invalid push subscription.' using errcode = '22023';
   end if;
   insert into public.mw_push_subscriptions(user_id, endpoint, p256dh, auth)
   values (me, p_endpoint, p_p256dh, p_auth)
-  on conflict (endpoint) do update set user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth;
+  on conflict (endpoint) do update set
+    user_id = excluded.user_id,
+    p256dh = excluded.p256dh,
+    auth = excluded.auth;
 end;
 $$;
 revoke all on function public.mw_push_subscription_register(text, text, text) from public, anon;
 grant execute on function public.mw_push_subscription_register(text, text, text) to authenticated;
 
 create or replace function public.mw_push_delivery_relay()
-returns trigger language plpgsql security definer set search_path = '' as $$
-declare hook_secret text; payload jsonb;
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  hook_secret text;
+  payload jsonb;
 begin
-  select decrypted_secret into hook_secret from vault.decrypted_secrets
-  where name = 'FCM_WEBHOOK_SECRET' limit 1;
+  select decrypted_secret into hook_secret
+  from vault.decrypted_secrets
+  where name = 'FCM_WEBHOOK_SECRET'
+  limit 1;
+
   if coalesce(hook_secret, '') = '' then
     raise warning 'MilkyWay push relay skipped: FCM_WEBHOOK_SECRET is not stored in Supabase Vault.';
     return new;
   end if;
+
   if tg_table_name = 'mw_post_notifications' then
-    payload := jsonb_build_object('type', 'post', 'record', jsonb_build_object(
-      'recipient_id', new.recipient_id, 'actor_name', new.actor_name,
-      'post_id', new.post_id, 'caption', new.caption
-    ));
+    payload := jsonb_build_object(
+      'type', 'post',
+      'record', jsonb_build_object(
+        'recipient_id', new.recipient_id,
+        'actor_name', new.actor_name,
+        'post_id', new.post_id,
+        'caption', new.caption
+      )
+    );
   elsif tg_table_name = 'mw_dm_calls' and new.status = 'ringing' then
-    payload := jsonb_build_object('type', 'call', 'record', jsonb_build_object(
-      'id', new.id, 'caller_id', new.caller_id, 'callee_id', new.callee_id,
-      'status', new.status, 'offer', new.offer, 'created_at', new.created_at
-    ));
+    payload := jsonb_build_object(
+      'type', 'call',
+      'record', jsonb_build_object(
+        'id', new.id,
+        'caller_id', new.caller_id,
+        'callee_id', new.callee_id,
+        'status', new.status,
+        'offer', new.offer,
+        'created_at', new.created_at
+      )
+    );
   else
     return new;
   end if;
+
   perform net.http_post(
     url := 'https://masiyatunda.com/api/fcm?action=event',
-    headers := jsonb_build_object('Content-Type', 'application/json', 'x-webhook-secret', hook_secret),
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'x-webhook-secret', hook_secret
+    ),
     body := payload
   );
   return new;
@@ -4047,13 +4123,20 @@ exception when others then
 end;
 $$;
 revoke all on function public.mw_push_delivery_relay() from public, anon, authenticated;
+
 drop trigger if exists mw_post_notifications_push on public.mw_post_notifications;
-create trigger mw_post_notifications_push after insert on public.mw_post_notifications
+create trigger mw_post_notifications_push
+  after insert on public.mw_post_notifications
   for each row execute function public.mw_push_delivery_relay();
 drop trigger if exists mw_dm_calls_push on public.mw_dm_calls;
-create trigger mw_dm_calls_push after insert on public.mw_dm_calls
+create trigger mw_dm_calls_push
+  after insert on public.mw_dm_calls
   for each row execute function public.mw_push_delivery_relay();
+notify pgrst, 'reload schema';
 
+-- ---------------------------------------------------------------------------------------------------------------
+-- 5. Final hardening and cleanup
+-- ---------------------------------------------------------------------------------------------------------------
 alter table public.mw_messages enable row level security;
 revoke all on public.mw_messages from anon;
 drop function if exists public.mw_repair_relax(text, text[]);

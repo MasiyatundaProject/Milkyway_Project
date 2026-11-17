@@ -4,6 +4,10 @@ The Android project is generated from `@capacitor/android` into `android/capacit
 
 The app starts at `https://www.masiyatunda.com/milkyway/`, the canonical app URL that returns without a redirect. The native plugin provides the in-app Back/Exit action, secure external HTTPS links, app version information, and Firebase client initialization.
 
+## Creator service portfolio schema
+
+If Creator Studio reports that `mw_creator_services` is missing from the Supabase schema cache, apply `supabase/migrations/20261127_milkyway_creator_services_schema_cache.sql` in the Supabase SQL editor. It repairs the table and grants `public` schema access before notifying PostgREST to reload. Alternatively, regenerate and run `supabase/milkyway-schema-repair.sql` for a full repair.
+
 ## Push notifications and background calls
 
 The Android app uses Firebase Cloud Messaging (FCM); installed web apps use Web Push through the service worker. Apply the `supabase/migrations/20261127_milkyway_push_delivery.sql` migration (or regenerate and apply `supabase/milkyway-schema-repair.sql`) before enabling delivery. Configure these private Render environment variables:
@@ -30,6 +34,8 @@ The workflow builds a signed release APK. Before running `.github/workflows/andr
 - `ANDROID_RELEASE_KEY_PASSWORD`
 
 Never commit the keystore or its passwords. The workflow decodes the base64 keystore into the runner's temporary directory and passes signing credentials to Gradle through environment variables; credentials are not written into the generated project. On a successful build, Actions commits the generated Android project and signed `milkyway/download/MilkyWay.apk` to the branch that triggered the build.
+
+The Cloudflare build publishes the APK at a versioned URL and rewrites homepage download links to that immutable file. Byte-range requests are enabled so interrupted downloads can resume; `/MilkyWay.apk` remains a compatibility link.
 
 ## Google Play coin purchases
 

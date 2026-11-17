@@ -79,7 +79,10 @@ copyFileSync(join(downloads, 'MilkyWay.apk'), join(publicDownloads, 'MilkyWay.ap
 copyFileSync(join(downloads, 'MilkyWay.apk'), join(out, 'MilkyWay.apk'));
 const versionedApk = `MilkyWay-${release.versionCode}.apk`;
 copyFileSync(join(downloads, 'MilkyWay.apk'), join(downloads, versionedApk));
-writeFileSync(join(downloads, 'version.json'), `${JSON.stringify({ ...release, apk: `/milkyway/download/${versionedApk}` }, null, 2)}\n`);
+const versionedApkUrl = `/milkyway/download/${versionedApk}`;
+writeFileSync(join(downloads, 'version.json'), `${JSON.stringify({ ...release, url: versionedApkUrl, apk: versionedApkUrl }, null, 2)}\n`);
+const homepage = join(out, 'index.html');
+writeFileSync(homepage, readFileSync(homepage, 'utf8').replace(/href="\/MilkyWay\.apk"/g, `href="${versionedApkUrl}"`));
 
 // Pages from the old MilkyWay app were removed. Saved links, bookmarks and old notifications that still
 // point at them open the new app instead of an error page.

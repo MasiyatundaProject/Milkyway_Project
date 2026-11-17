@@ -40,7 +40,6 @@ export class FeedView {
       afterRender: mounted => this.#sources(mounted),
       onChange: index => {
         if (index > 0) this.interacted = true;
-        this.#trackProgress();
         const item = this.pager.items[index];
         this.#trackView(item);
         if (item?.kind === 'ad') adImpression(item.ad);
@@ -162,20 +161,25 @@ export class FeedView {
     const share = rail('share', icon.share, t('share'));
     const name = h('button', { class: 'meta-name', type: 'button', 'data-act': 'profile' });
     const caption = h('p', { class: 'meta-caption', 'data-act': 'caption' });
-    const bar = h('i');
     const seek = h('input', { class: 'video-seek', type: 'range', min: '0', max: '1000', step: '1', value: '0', 'aria-label': 'Seek video' });
-    const time = h('span', { class: 'video-time', 'aria-live': 'off' }, '0:00 / 0:00');
-    const seekBy = (seconds, label) => h('button', {
-      class: 'video-seek-btn', type: 'button', 'aria-label': label,
-      onclick: event => { event.stopPropagation(); if (Number.isFinite(video.duration)) video.currentTime = Math.max(0, Math.min(video.duration, video.currentTime + seconds)); },
-    }, seconds < 0 ? '−10' : '+10');
-    const videoControls = h('div', { class: 'video-controls', 'data-act': 'video-controls' },
-      seekBy(-10, 'Rewind 10 seconds'), seek, seekBy(10, 'Forward 10 seconds'), time);
+    const currentTime = h('span', { class: 'video-time', 'aria-live': 'off' }, '0:00');
+    const durationTime = h('span', { class: 'video-time', 'aria-live': 'off' }, '0:00');
+    const videoControls = h('div', { class: 'video-controls', 'data-act': 'video-controls' }, currentTime, seek, durationTime);
     const stopSeekPropagation = event => event.stopPropagation();
     for (const type of ['pointerdown', 'pointerup', 'touchstart', 'touchend', 'click']) videoControls.addEventListener(type, stopSeekPropagation);
     seek.addEventListener('input', () => {
       if (Number.isFinite(video.duration) && video.duration > 0) video.currentTime = video.duration * Number(seek.value) / 1000;
     });
+    const seeking = event => {
+      if (event.type === 'pointerdown') {
+        slide.classList.add('controls-seeking', 'controls-visible');
+        clearTimeout(slide._controlsTimer);
+      } else {
+        slide.classList.remove('controls-seeking');
+        this.#showVideoControls(slide);
+      }
+    };
+    for (const type of ['pointerdown', 'pointerup', 'pointercancel', 'change', 'blur']) seek.addEventListener(type, seeking);
     const formatTime = seconds => {
       if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
       const whole = Math.floor(seconds);
@@ -184,8 +188,10 @@ export class FeedView {
     const updateSeek = () => {
       const duration = Number.isFinite(video.duration) ? video.duration : 0;
       if (document.activeElement !== seek) seek.value = duration ? String(Math.round(video.currentTime / duration * 1000)) : '0';
-      time.textContent = `${formatTime(video.currentTime)} / ${formatTime(duration)}`;
+      currentTime.textContent = formatTime(video.currentTime);
+      durationTime.textContent = formatTime(duration);
       seek.setAttribute('aria-valuetext', `${formatTime(video.currentTime)} of ${formatTime(duration)}`);
+      seek.style.setProperty('--seek-progress', `${duration ? video.currentTime / duration * 100 : 0}%`);
       seek.disabled = !duration;
     };
     for (const type of ['loadedmetadata', 'durationchange', 'timeupdate', 'seeked']) video.addEventListener(type, updateSeek);
@@ -199,8 +205,95 @@ export class FeedView {
       media, brandMark(), h('div', { class: 'shade', 'aria-hidden': 'true' }),
       h('aside', { class: 'rail' }, h('div', { class: 'rail-author', 'data-act': 'profile' }, avatarNode, follow), like, comment, save, gift, share),
       h('div', { class: 'meta' }, name, caption, adBar), suggest,
-      videoControls, h('div', { class: 'progress', 'aria-hidden': 'true' }, bar));
-    slide._refs = { video, img, text, paused, missing, slideshowBadge, avatarNode, follow, like, comment, save, gift, share, name, caption, bar, videoControls, seek, time, adBar, suggest };
+      videoControls);
+    slide._refs = { video, img, text, paused, missing, slideshowBadge, avatarNode, follow, like, comment, save, gift, share, name, caption, videoControls, seek, currentTime, durationTime, adBar, suggest };
+    const imagePointers = new Map();
+    let imagePinch = null, imageScale = 1, imageX = 0, imageY = 0, suppressImageClickUntil = 0;
+    const paintImageZoom = () => {
+      const bounds = media.getBoundingClientRect();
+      const fit = slide.dataset.fit === 'cover'
+        ? Math.max(bounds.width / (img.naturalWidth || bounds.width), bounds.height / (img.naturalHeight || bounds.height))
+        : Math.min(bounds.width / (img.naturalWidth || bounds.width), bounds.height / (img.naturalHeight || bounds.height));
+      const maxX = Math.max(0, ((img.naturalWidth || bounds.width) * fit * imageScale - bounds.width) / 2);
+      const maxY = Math.max(0, ((img.naturalHeight || bounds.height) * fit * imageScale - bounds.height) / 2);
+      imageX = Math.max(-maxX, Math.min(maxX, imageX));
+      imageY = Math.max(-maxY, Math.min(maxY, imageY));
+      img.style.translate = `${imageX}px ${imageY}px`;
+      img.style.scale = String(imageScale);
+      media.classList.toggle('image-zoomed', imageScale > 1);
+    };
+    const resetImageZoom = () => {
+      imagePointers.clear();
+      imagePinch = null;
+      imageScale = 1;
+      imageX = imageY = 0;
+      img.style.translate = '';
+      img.style.scale = '';
+      media.classList.remove('image-zoomed');
+    };
+    media.addEventListener('pointerdown', event => {
+      if (event.target !== img || img.hidden || !slide._post || mediaKind(slide._post) !== 'image') return;
+      imagePointers.set(event.pointerId, { x: event.clientX, y: event.clientY, prevX: event.clientX, prevY: event.clientY });
+      media.setPointerCapture?.(event.pointerId);
+      if (imagePointers.size > 1) {
+        const points = [...imagePointers.values()];
+        imagePinch = {
+          distance: Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y),
+          scale: imageScale, x: imageX, y: imageY,
+          centerX: (points[0].x + points[1].x) / 2,
+          centerY: (points[0].y + points[1].y) / 2,
+        };
+        suppressImageClickUntil = performance.now() + 500;
+        event.preventDefault();
+      }
+    });
+    media.addEventListener('pointermove', event => {
+      const point = imagePointers.get(event.pointerId);
+      if (!point) return;
+      point.x = event.clientX;
+      point.y = event.clientY;
+      if (imagePinch) {
+        const points = [...imagePointers.values()];
+        const distance = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+        const scale = Math.max(1, Math.min(4, imagePinch.scale * distance / Math.max(1, imagePinch.distance)));
+        const centerX = (points[0].x + points[1].x) / 2;
+        const centerY = (points[0].y + points[1].y) / 2;
+        const bounds = media.getBoundingClientRect();
+        const ratio = scale / imagePinch.scale;
+        imageScale = scale;
+        imageX = imagePinch.x + centerX - imagePinch.centerX + (imagePinch.centerX - bounds.left - bounds.width / 2) * (1 - ratio);
+        imageY = imagePinch.y + centerY - imagePinch.centerY + (imagePinch.centerY - bounds.top - bounds.height / 2) * (1 - ratio);
+        suppressImageClickUntil = performance.now() + 500;
+        paintImageZoom();
+        event.preventDefault();
+      } else if (imagePointers.size === 1 && imageScale > 1) {
+        imageX += point.x - point.prevX;
+        imageY += point.y - point.prevY;
+        point.prevX = point.x;
+        point.prevY = point.y;
+        suppressImageClickUntil = performance.now() + 500;
+        paintImageZoom();
+        event.preventDefault();
+      } else {
+        point.prevX = point.x;
+        point.prevY = point.y;
+      }
+    });
+    const endImagePointer = event => {
+      if (!imagePointers.has(event.pointerId)) return;
+      if (imagePinch) suppressImageClickUntil = performance.now() + 500;
+      imagePointers.delete(event.pointerId);
+      if (imagePointers.size < 2) imagePinch = null;
+      for (const point of imagePointers.values()) { point.prevX = point.x; point.prevY = point.y; }
+    };
+    media.addEventListener('pointerup', endImagePointer);
+    media.addEventListener('pointercancel', endImagePointer);
+    media.addEventListener('click', event => {
+      if (performance.now() >= suppressImageClickUntil) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }, true);
+    slide._refs.resetImageZoom = resetImageZoom;
     // Portrait media fills the screen; landscape media is letterboxed instead of cropped.
     const fit = (w, h) => { if (w && h) slide.dataset.fit = h >= w * 1.2 ? 'cover' : 'contain'; };
     video.addEventListener('loadedmetadata', () => fit(video.videoWidth, video.videoHeight));
@@ -231,14 +324,18 @@ export class FeedView {
     r.text.hidden = type !== 'text';
     r.paused.hidden = true;
     r.videoControls.hidden = type !== 'video';
+    slide.classList.remove('controls-visible', 'controls-seeking');
+    clearTimeout(slide._controlsTimer);
     r.seek.value = '0';
     r.seek.disabled = true;
-    r.time.textContent = '0:00 / 0:00';
+    r.currentTime.textContent = '0:00';
+    r.durationTime.textContent = '0:00';
+    r.seek.style.setProperty('--seek-progress', '0%');
+    r.resetImageZoom();
     r.missing.hidden = true;
     r.slideshowBadge.hidden = (post.media?.items?.length || post.media_items?.length || 0) < 2;
     r.slideshowBadge.textContent = `▧ ${post.media?.items?.length || post.media_items?.length || 0}`;
     delete slide.dataset.fit;
-    r.bar.style.transform = 'scaleX(0)';
     if (type === 'video') {
       const still = poster(post.media.url, device.mediaWidth);
       still ? (r.video.poster = still) : r.video.removeAttribute('poster');
@@ -302,6 +399,8 @@ export class FeedView {
   }
 
   #release(slide) {
+    clearTimeout(slide._controlsTimer);
+    slide.classList.remove('controls-visible', 'controls-seeking');
     playback.source(slide._refs.video, null, 99);
     if (device.lowEnd) slide._refs.img.removeAttribute('src');
   }
@@ -316,15 +415,14 @@ export class FeedView {
     });
   }
 
-  #trackProgress() {
-    this.progressOff?.();
-    const slide = this.pager.slideAt(this.pager.index);
-    const video = slide?._refs.video;
-    if (!video || !slide._post || mediaKind(slide._post) !== 'video') return;
-    const bar = slide._refs.bar;
-    const tick = () => { if (video.duration) bar.style.transform = `scaleX(${video.currentTime / video.duration})`; };
-    video.addEventListener('timeupdate', tick);
-    this.progressOff = () => video.removeEventListener('timeupdate', tick);
+  #showVideoControls(slide) {
+    slide.classList.add('controls-visible');
+    clearTimeout(slide._controlsTimer);
+    slide._controlsTimer = setTimeout(() => {
+      if (!slide._refs.videoControls.contains(document.activeElement) && !slide.classList.contains('controls-seeking')) {
+        slide.classList.remove('controls-visible');
+      }
+    }, 2600);
   }
 
   // ---- Interaction -----------------------------------------------------------------------------------------
@@ -385,10 +483,11 @@ export class FeedView {
     const post = slide._post;
     if (!post) return;
     const kind = mediaKind(post);
-    // Photos open full size in the post popup (pinch-free zoom, comments, likes), like a tap on a Nova grid tile.
+    // Photos open full size in the post popup with pinch zoom, comments and likes.
     if (kind === 'image') { if (slide._refs.missing.hidden) this.hooks.openPost?.(post); return; }
     if (kind !== 'video') return;
     const video = slide._refs.video;
+    this.#showVideoControls(slide);
     if (playback.muted) { playback.setMuted(false); if (video.paused) playback.toggle(video); return; }
     const playing = playback.toggle(video);
     slide._refs.paused.hidden = playing;
