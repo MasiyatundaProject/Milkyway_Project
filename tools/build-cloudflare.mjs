@@ -67,7 +67,12 @@ writeFileSync(workerPath, versionedWorker);
 // mix two builds, and browsers or proxies holding an older MilkyWay.apk can never hand it out again.
 const downloads = join(out, 'milkyway', 'download');
 const release = JSON.parse(readFileSync(join(downloads, 'version.json'), 'utf8'));
-if (!Number.isInteger(release.versionCode) || !existsSync(join(downloads, 'MilkyWay.apk'))) throw new Error('milkyway/download needs MilkyWay.apk and a valid version.json.');
+const apkPath = join(downloads, 'MilkyWay.apk');
+if (!Number.isInteger(release.versionCode) || !existsSync(apkPath)) throw new Error('milkyway/download needs MilkyWay.apk and a valid version.json.');
+const apkHeader = readFileSync(apkPath).subarray(0, 2);
+if (statSync(apkPath).size < 1024 * 1024 || apkHeader[0] !== 0x50 || apkHeader[1] !== 0x4b) {
+  throw new Error('milkyway/download/MilkyWay.apk is missing, truncated, or not a ZIP-based APK.');
+}
 const publicDownloads = join(out, 'download');
 mkdirSync(publicDownloads, { recursive: true });
 copyFileSync(join(downloads, 'MilkyWay.apk'), join(publicDownloads, 'MilkyWay.apk'));

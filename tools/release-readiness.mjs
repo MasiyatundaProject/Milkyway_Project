@@ -42,12 +42,21 @@ if (!issues.some(x => x.includes('Potential sensitive'))) console.log('PASS: no 
 
 const cap = JSON.parse(read('capacitor.config.json'));
 if (cap.server?.url) warnings.push(`Capacitor uses remote server.url (${cap.server.url}); bundled Android app depends on network for its web UI and cannot be assumed to boot offline from local assets.`);
-const splash = path.join(root, 'android/capacitor/app/src/main/res/raw/milkyway_splash.mp4');
-if (!fs.existsSync(splash)) issues.push('Android splash video is missing.');
+const splash = path.join(root, 'android/capacitor/app/src/main/res/drawable/splash.png');
+if (!fs.existsSync(splash)) issues.push('Android splash image is missing.');
 else {
   const bytes = fs.readFileSync(splash);
-  if (bytes.length < 12 || bytes.toString('ascii', 4, 8) !== 'ftyp') issues.push('Android splash file does not have a recognizable MP4 header.');
-  else console.log(`PASS: Android splash file is a recognizable MP4 (${bytes.length} bytes)`);
+  const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  if (bytes.length < 24 || !bytes.subarray(0, 8).equals(pngSignature)) issues.push('Android splash image is not a valid PNG.');
+  else console.log(`PASS: Android splash image is a recognizable PNG (${bytes.length} bytes)`);
+}
+
+const apk = path.join(root, 'milkyway/download/MilkyWay.apk');
+if (!fs.existsSync(apk)) issues.push('Downloadable Android APK is missing.');
+else {
+  const bytes = fs.readFileSync(apk);
+  if (bytes.length < 1024 * 1024 || bytes[0] !== 0x50 || bytes[1] !== 0x4b) issues.push('Downloadable Android APK is missing, truncated, or not a ZIP-based APK.');
+  else console.log(`PASS: downloadable Android APK exists (${bytes.length} bytes)`);
 }
 
 for (const warning of warnings) console.warn(`WARN: ${warning}`);
