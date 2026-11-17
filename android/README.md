@@ -4,6 +4,24 @@ The Android project is generated from `@capacitor/android` into `android/capacit
 
 The app starts at `https://www.masiyatunda.com/milkyway/`, the canonical app URL that returns without a redirect. The native plugin provides the in-app Back/Exit action, secure external HTTPS links, app version information, and Firebase client initialization.
 
+## Push notifications and background calls
+
+The Android app uses Firebase Cloud Messaging (FCM); installed web apps use Web Push through the service worker. Apply the `supabase/migrations/20261127_milkyway_push_delivery.sql` migration (or regenerate and apply `supabase/milkyway-schema-repair.sql`) before enabling delivery. Configure these private Render environment variables:
+
+- `SUPABASE_SERVICE_ROLE_KEY`: the Supabase service-role/secret key, server-side only.
+- `FIREBASE_SERVICE_ACCOUNT_JSON`: Firebase service-account JSON with Firebase Cloud Messaging API enabled.
+- `FIREBASE_WEB_CONFIG`: the Firebase project's public web-app config JSON (`apiKey`, `appId`, `projectId`, `messagingSenderId`).
+- `FCM_WEBHOOK_SECRET`: a newly generated random secret; store the exact same value in Supabase Vault under the name `FCM_WEBHOOK_SECRET`.
+- `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`: Web Push VAPID key pair and a contact URI such as `mailto:admin@example.com`.
+
+Store the webhook secret in Supabase Vault (do not put it in a migration or source control), for example:
+
+```sql
+select vault.create_secret('<same-random-value-as-FCM_WEBHOOK_SECRET>', 'FCM_WEBHOOK_SECRET');
+```
+
+The migration relays published-post and incoming-call events through `pg_net`. Delivery is best-effort: if provider credentials or a user's push permission/device token are missing, the database write and call setup still succeed. Browsers must allow notifications; iOS web push requires an installed home-screen web app on supported iOS versions. Incoming call push alerts open the authorized call screen; native/OS background policies may require the user to tap the alert before microphone or camera access can start.
+
 The workflow builds a signed release APK. Before running `.github/workflows/android-apk.yml`, add these repository Actions secrets using the existing Android release keystore:
 
 - `ANDROID_RELEASE_KEYSTORE_BASE64`

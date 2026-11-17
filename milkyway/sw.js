@@ -1,10 +1,10 @@
 // MilkyWay service worker.
 // Precaches the new app shell (index.html + app/ modules) so startup never waits for the network; the feed itself
 // comes from IndexedDB (app/core/store.js). Other assets are cached on first use by the shared stale-while-revalidate rule.
-const CACHE='milkyway-v228-livekit-room-guard';
+const CACHE='milkyway-v229-push-delivery';
 const SHELL=['./','./index.html','./manifest.json','./favicon.ico','./icon-192.png','./icon-512.png','./brand/favicon-32.png','./splash.css?v=1','./splash.js?v=1','./brand/milkyway-splash.webp','./brand/milkyway-watermark-galaxy.webp',
   './app/app.css?v=20','./app/main.js','./app/config.js',
-  './app/core/events.js','./app/core/sdk.js','./app/core/livekit-access.js','./app/core/net.js','./app/core/store.js','./app/core/sync.js','./app/core/device.js','./app/core/media.js','./app/core/media-image.js','./app/core/media-worker.js','./app/core/media-optimizer.js','./app/core/update-check.js','./app/core/i18n.js','./app/core/locales.js',
+  './app/core/events.js','./app/core/sdk.js','./app/core/livekit-access.js','./app/core/net.js','./app/core/store.js','./app/core/sync.js','./app/core/device.js','./app/core/media.js','./app/core/media-image.js','./app/core/media-worker.js','./app/core/media-optimizer.js','./app/core/update-check.js','./app/core/i18n.js','./app/core/locales.js','./app/core/push.js',
   './app/data/feed.js','./app/data/profiles.js','./app/data/comments.js','./app/data/live.js','./app/data/gifts.js','./app/data/chats.js','./app/data/messages.js','./app/data/presence.js','./app/data/promoted.js','./app/data/post-notifications.js',
   './app/ui/dom.js','./app/ui/pager.js','./app/ui/playback.js','./app/ui/feed-view.js','./app/ui/sheet.js','./app/ui/live-view.js','./app/ui/live-session.js','./app/ui/live-controls.js',
   './app/ui/comments-sheet.js','./app/ui/gift-tray.js','./app/ui/inbox-view.js','./app/ui/auth-sheet.js','./app/ui/profile-view.js','./app/ui/profile-search.js','./app/ui/discovery-view.js','./app/ui/post-viewer.js','./app/ui/compose-sheet.js','./app/ui/call-view.js','./app/ui/settings-view.js','./app/ui/studio-view.js','./app/ui/admin-view.js','./app/ui/wallet-onboarding.js','./app/ui/share-sheet.js',
@@ -55,9 +55,11 @@ self.addEventListener('fetch',event=>{
   event.respondWith(savedVideo(request));
 });
 const CALL_HASH=/^#call=([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/i;
+const POST_ID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 function showCall(data){
   const call=data.call||{};
-  if(!CALL_HASH.test(new URL(data.url,self.location.origin).hash)||!['ring','missed'].includes(call.kind))return Promise.resolve();
+  const address=new URL(data.url,self.location.origin),match=CALL_HASH.exec(address.hash);
+  if(!match||match[1].toLowerCase()!==String(call.id||'').toLowerCase()||!['ring','missed'].includes(call.kind))return Promise.resolve();
   return self.clients.matchAll({type:'window',includeUncontrolled:true}).then(clients=>{
     const visible=clients.filter(client=>client.visibilityState==='visible'&&new URL(client.url).pathname.startsWith('/milkyway/'));
     // An open app rings by itself; the push only nudges it to check straight away.
@@ -65,7 +67,7 @@ function showCall(data){
     const ring=call.kind==='ring';
     return self.registration.showNotification(data.title.slice(0,160),{body:data.body.slice(0,200),icon:'./icon-192.png',badge:'./brand/milkyway-emblem-96.png',tag:String(data.tag||'').slice(0,180),renotify:true,requireInteraction:ring,silent:false,vibrate:ring?[700,350,700,350,700,350,700,350,700]:[200],timestamp:Date.now(),
       actions:ring?[{action:'answer',title:String(call.answer||'Answer').slice(0,40)},{action:'decline',title:String(call.decline||'Decline').slice(0,40)}]:[],
-      data:{url:new URL(data.url,self.location.origin).href,call:{id:call.id,kind:call.kind}}});
+      data:{url:address.href,call:{id:call.id,kind:call.kind}}});
   });
 }
 self.addEventListener('push', event => {
@@ -76,6 +78,18 @@ self.addEventListener('push', event => {
   try { address = new URL(data.url, self.location.origin); } catch { return; }
   if (address.origin !== self.location.origin || address.pathname !== '/milkyway/') return;
   if (data.call) { event.waitUntil(showCall(data)); return; }
+  if (data.post && POST_ID.test(data.post.id || '')
+    && address.searchParams.get('post') === data.post.id) {
+    event.waitUntil(self.registration.showNotification(data.title.slice(0, 160), {
+      body: data.body.slice(0, 200),
+      icon: './icon-192.png',
+      badge: './brand/milkyway-emblem-96.png',
+      tag: String(data.tag || `post:${data.post.id}`).slice(0, 180),
+      renotify: false,
+      data: { url: address.href },
+    }));
+    return;
+  }
   if (!/^#live=mw-conversation-(audio|video)-[a-f0-9-]{36}$/i.test(address.hash)) return;
   event.waitUntil(self.registration.showNotification(data.title.slice(0, 160), { body: data.body.slice(0, 200), icon: './icon-192.png', badge: './brand/milkyway-emblem-96.png', tag: String(data.tag || '').slice(0, 180), renotify: false, silent: data.silent === true, data: { url: address.href } }));
 });
@@ -90,7 +104,10 @@ self.addEventListener('notificationclick', event => {
     event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async clients => {
       const client = clients.find(item => new URL(item.url).pathname.startsWith('/milkyway/'));
       if (client) { client.postMessage({ type: 'mw-call-action', id: call.id, action });await client.focus?.().catch(() => {}); }
-      else await self.clients.openWindow(`${address.href}&do=${action}`);
+      else {
+        address.searchParams.set('do', action);
+        await self.clients.openWindow(address.href);
+      }
     }));
     return;
   }

@@ -46,14 +46,22 @@ export async function livekit(method, room, body = {}, grant = null) {
   return data;
 }
 
-// Whether LiveKit accepts this server's key/secret for LIVEKIT_URL. A key from another LiveKit project (or a stale
-// secret) still signs tokens, but every client then fails with "could not establish signal connection: invalid API
-// key". Checked with one cheap RoomService call and remembered for a few minutes per server instance.
+// The RoomService check is only for the explicit health endpoint. Token issuance can be performed locally and must
+// not spend management API quota for every new server instance or call.
 let credentialCheck = { at: 0, ok: true, reason: '' };
-export async function livekitUsable() {
+let credentialCheckInFlight = null;
+export async function livekitUsable({ verifyCredentials = false } = {}) {
   if (!livekitConfigured() || !validLivekitUrl()) return false;
+  if (!verifyCredentials) return true;
   const age = Date.now() - credentialCheck.at;
-  if (credentialCheck.at && age < (credentialCheck.ok ? 5 * 60_000 : 60_000)) return credentialCheck.ok;
+  if (credentialCheck.at && age < (credentialCheck.ok ? 60 * 60_000 : 5 * 60_000)) return credentialCheck.ok;
+  if (credentialCheckInFlight) return credentialCheckInFlight;
+  credentialCheckInFlight = checkLivekitCredentials();
+  try { return await credentialCheckInFlight; }
+  finally { credentialCheckInFlight = null; }
+}
+
+async function checkLivekitCredentials() {
   const now = Math.floor(Date.now() / 1000);
   const jwt = sign({ iss: env('LIVEKIT_API_KEY'), sub: 'milkyway-server', nbf: now - 5, exp: now + 60, video: { roomList: true } });
   const origin = livekitUrl().replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:');
@@ -76,7 +84,7 @@ export async function livekitUsable() {
     });
     credentialCheck = { at: Date.now(), ok: !rejected, reason };
   } catch {
-    credentialCheck = { at: Date.now() - 4 * 60_000, ok: true, reason: 'LiveKit was unreachable during the credential check.' };
+    credentialCheck = { at: Date.now(), ok: true, reason: 'LiveKit was unreachable during the credential check; token signing remains enabled.' };
   }
   return credentialCheck.ok;
 }

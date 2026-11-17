@@ -15,6 +15,7 @@ import { toast } from './ui/dom.js';
 import { profiles } from './data/profiles.js';
 import { fetchSharedPost } from './data/feed.js';
 import { startUpdateCheck } from './core/update-check.js';
+import { initPushNotifications } from './core/push.js';
 
 // Conversation-room links belong to a screen that is not in this shell yet. Call links (#call=<id>) open the call screen.
 const comingSoon = hash => /^#live=mw-conversation-/.test(hash);
@@ -137,7 +138,14 @@ function showExplore() {
 
 function route() {
   const call = callLink(location.hash);
-  if (call) { history.replaceState(null, '', location.pathname + location.search); if (requireLogin()) callView().then(calls => calls.ring(call)); }
+  if (call) {
+    const params = new URLSearchParams(location.search);
+    const action = params.get('do') || '';
+    params.delete('do');
+    const query = params.toString();
+    history.replaceState(null, '', location.pathname + (query ? `?${query}` : ''));
+    if (requireLogin()) callView().then(calls => calls.handleNotification(call, action));
+  }
   if (comingSoon(location.hash)) { history.replaceState(null, '', location.pathname + location.search); soon(); }
   const hash = decodeURIComponent(location.hash.slice(1));
   if (hash.startsWith('live')) showLive(hash.split('=')[1] || null);
@@ -255,9 +263,10 @@ idle(() => {
         else { history.pushState(null, '', hash); route(); }
       } else if (data?.type === 'mw-call-push' || data?.type === 'mw-call-action') {
         const id = data.callId || data.call?.id || data.id || callLink(new URL(data.url || location.href, location.href).hash);
-        if (auth.signedIn()) callView().then(calls => (id ? calls.ring(String(id)) : calls.watch()));
+        if (auth.signedIn()) callView().then(calls => (id ? calls.handleNotification(String(id), data.action || '') : calls.watch()));
       }
     });
   }
   startUpdateCheck(config.deploymentId);
+  initPushNotifications();
 }, 2500);

@@ -7,7 +7,7 @@ import liveRoom from '../api/milkyway-live-room.js';
 import callApi from '../api/milkyway-call.js';
 import livekitToken from '../api/milkyway-livekit-token.js';
 import { runApi } from '../api/_lib/fetch-adapter.js';
-import { closeRoom } from '../api/_lib/livekit.js';
+import { closeRoom, livekitUsable } from '../api/_lib/livekit.js';
 import { postShareResponse } from '../api/_lib/post-share.js';
 import { assertRoomAccess } from '../milkyway/app/core/livekit-access.js';
 import { checkDeployment } from '../milkyway/app/core/update-check.js';
@@ -15,6 +15,46 @@ import { checkDeployment } from '../milkyway/app/core/update-check.js';
 const A = '11111111-1111-4111-8111-111111111111'; // public author
 const B = '22222222-2222-4222-8222-222222222222'; // private author
 const P = n => `aaaaaaaa-aaaa-4aaa-8aaa-${String(n).padStart(12, '0')}`;
+
+test('ordinary LiveKit token checks avoid RoomService management requests', async () => {
+  const originalFetch = globalThis.fetch;
+  const previousEnv = Object.fromEntries(['LIVEKIT_URL', 'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET'].map(key => [key, process.env[key]]));
+  let requests = 0;
+  process.env.LIVEKIT_URL = 'wss://live.example.test';
+  process.env.LIVEKIT_API_KEY = 'test-key';
+  process.env.LIVEKIT_API_SECRET = 'test-secret';
+  globalThis.fetch = async () => { requests++; throw new Error('Unexpected LiveKit management request.'); };
+  try {
+    assert.equal(await livekitUsable(), true);
+    assert.equal(requests, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('creator service cache repair and push delivery cover post and incoming-call notifications', () => {
+  const creatorMigration = readFileSync(new URL('../supabase/migrations/20261127_milkyway_creator_services_schema_cache.sql', import.meta.url), 'utf8');
+  const pushMigration = readFileSync(new URL('../supabase/migrations/20261127_milkyway_push_delivery.sql', import.meta.url), 'utf8');
+  const repair = readFileSync(new URL('../supabase/milkyway-schema-repair.sql', import.meta.url), 'utf8');
+  const worker = readFileSync(new URL('../milkyway/sw.js', import.meta.url), 'utf8');
+  const pushClient = readFileSync(new URL('../milkyway/app/core/push.js', import.meta.url), 'utf8');
+  const pushApi = readFileSync(new URL('../api/fcm.js', import.meta.url), 'utf8');
+  assert.match(creatorMigration, /alter table public\.mw_creator_services[\s\S]*notify pgrst, 'reload schema'/i);
+  assert.match(creatorMigration, /grant select on public\.mw_creator_services to anon, authenticated/i);
+  assert.match(pushMigration, /vault\.decrypted_secrets/);
+  assert.match(pushMigration, /mw_post_notifications_push/);
+  assert.match(pushMigration, /mw_dm_calls_push/);
+  assert.match(pushApi, /createCipheriv/);
+  assert.match(pushApi, /FCM_WEBHOOK_SECRET/);
+  assert.match(pushClient, /applicationServerKey/);
+  assert.match(worker, /data\.post/);
+  assert.match(worker, /data\.call/);
+  assert.match(repair, /mw_push_delivery_relay/);
+});
 
 function fakeSupabase(routes) {
   const calls = [];

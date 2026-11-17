@@ -85,7 +85,7 @@ class CallScreen {
     playback.suspend(true);
     if (incoming) this.#setState('incoming');
     else { this.#setState('ringing'); this.#connect(); this.ringTimer = setTimeout(() => this.hangUp('missed'), RING_MS); }
-    this.poll = setInterval(() => this.#check(), 2000);
+    this.poll = setInterval(() => this.#check(), 5000);
     if (incoming) navigator.vibrate?.([400, 200, 400, 200, 400]);
   }
 
@@ -251,6 +251,8 @@ class CallScreen {
     } catch (error) { toast(error?.message || t('callFailed')); this.finish('ended'); }
   }
 
+  acceptFromNotification() { return this.#accept(); }
+
   async #decline() {
     navigator.vibrate?.(0);
     callApi('decline', { id: this.call.id }).catch(() => {});
@@ -342,6 +344,22 @@ export const calls = {
     } catch {}
   },
 
+  async handleNotification(callId, action = '') {
+    if (!auth.signedIn()) return;
+    if (!['answer', 'decline'].includes(action)) return calls.ring(callId);
+    try {
+      const call = await getCall(callId);
+      if (!call || call.status !== 'ringing' || call.callee_id !== auth.userId) return;
+      if (action === 'decline') {
+        await callApi('decline', { id: call.id });
+        return;
+      }
+      if (calls.active) return;
+      calls.active = new CallScreen({ call, peer: call.caller_id, mode: call.offer?.mode === 'video' ? 'video' : 'audio', incoming: true });
+      await calls.active.acceptFromNotification();
+    } catch (error) { console.warn('[call] Notification action failed.', error); }
+  },
+
   /** Listens for incoming calls while signed in. */
   watch() {
     if (calls.watching) return;
@@ -365,7 +383,7 @@ export const calls = {
       callApi('incoming').then(result => result?.call && calls.ring(result.call)).catch(() => {});
     };
     listen(); poll();
-    setInterval(poll, 8000);
+    setInterval(poll, 15000);
     document.addEventListener('visibilitychange', poll);
     bus.on('auth', async () => {
       if (channel) { try { (await supabase()).removeChannel(channel); } catch {} channel = null; }

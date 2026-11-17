@@ -62,7 +62,7 @@ export default route({
     }
     const { p256dh, auth } = subscription.keys || {};
     if (typeof p256dh !== 'string' || typeof auth !== 'string' || !p256dh || !auth || p256dh.length > 256 || auth.length > 256) throw new ApiError(400, 'Invalid push subscription.');
-    await ctx.rest('mw_push_subscriptions?on_conflict=user_id,endpoint', { method: 'POST', body: { user_id: ctx.user.id, endpoint, p256dh, auth }, prefer: 'resolution=merge-duplicates' });
+    await ctx.rpc('mw_push_subscription_register', { p_endpoint: endpoint, p_p256dh: p256dh, p_auth: auth });
     return { ok: true };
   },
 
