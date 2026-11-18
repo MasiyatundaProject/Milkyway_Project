@@ -195,8 +195,13 @@ async function handle({ ctx, body, method }) {
     const seated = await speakersOf(ctx, room.roomName);
     if (seated.length >= settings.layout - 1) throw new ApiError(409, 'All guest seats are full.');
     const user = await whoAmI(ctx);
-    await upsertMember(ctx, room.roomName, ctx.user.id, { name: user.name, avatar: user.avatar, state: 'pending', host_muted: false });
-    return { state: 'pending', invited };
+    const state = await ctx.rpc('mw_live_room_request', {
+      p_room_name: room.roomName,
+      p_name: user.name,
+      p_avatar: user.avatar,
+    });
+    if (!['pending', 'speaker'].includes(state)) throw new ApiError(503, 'The LIVE request could not be saved.');
+    return { state, invited };
   }
 
   if (action === 'cancel-request' || action === 'decline-invite' || action === 'leave-stage') {

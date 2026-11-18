@@ -701,7 +701,9 @@ test('LIVE settings schema and follower post notifications have an idempotent Re
 test('LIVE room table privileges are granted to authenticated users and limited to active rooms by RLS', () => {
   const migration = readFileSync(new URL('../supabase/migrations/20261125_milkyway_live_room_rls.sql', import.meta.url), 'utf8');
   const requestMigration = readFileSync(new URL('../supabase/migrations/20261130_milkyway_live_member_request_rls.sql', import.meta.url), 'utf8');
+  const requestRpc = readFileSync(new URL('../supabase/migrations/20261130_milkyway_live_guest_request_rpc.sql', import.meta.url), 'utf8');
   const repair = readFileSync(new URL('../supabase/milkyway-schema-repair.sql', import.meta.url), 'utf8');
+  const roomApi = readFileSync(new URL('../api/milkyway-live-room.js', import.meta.url), 'utf8');
   assert.match(migration, /grant select, insert, update, delete[\s\S]*mw_live_room_settings, public\.mw_live_room_members, public\.mw_live_room_messages[\s\S]*to authenticated/i);
   assert.match(migration, /create or replace function public\.mw_live_room_is_active\(room text\)[\s\S]*session\.is_live is true/i);
   assert.match(migration, /create policy mw_live_members_self[\s\S]*user_id = auth\.uid\(\)[\s\S]*state in \('viewer', 'pending'\)/i);
@@ -710,8 +712,64 @@ test('LIVE room table privileges are granted to authenticated users and limited 
   assert.match(requestMigration, /create policy mw_live_members_self_insert[\s\S]*for insert to authenticated[\s\S]*state in \('viewer', 'pending'\)/i);
   assert.match(requestMigration, /create policy mw_live_members_self_update[\s\S]*for update to authenticated[\s\S]*state in \('viewer', 'pending'\)/i);
   assert.match(requestMigration, /create policy mw_live_members_host_update[\s\S]*for update to authenticated[\s\S]*mw_is_live_host\(room_name\)/i);
+  assert.match(requestRpc, /create or replace function public\.mw_live_room_request\([\s\S]*security definer[\s\S]*auth\.uid\(\)[\s\S]*session\.is_live is true[\s\S]*state = 'pending'/i);
+  assert.match(requestRpc, /grant execute on function public\.mw_live_room_request\(text, text, text\) to authenticated/i);
+  assert.match(roomApi, /ctx\.rpc\('mw_live_room_request', \{[\s\S]*p_room_name: room\.roomName/);
   assert.match(repair, /supabase\/migrations\/20261130_milkyway_live_member_request_rls\.sql/);
+  assert.match(repair, /supabase\/migrations\/20261130_milkyway_live_guest_request_rpc\.sql/);
   assert.match(repair, /supabase\/migrations\/20261125_milkyway_live_room_rls\.sql/);
+});
+
+test('LIVE guest request uses the authenticated request RPC and returns its persisted state', async () => {
+  const viewerId = '22222222-2222-4222-8222-222222222222';
+  const hostId = '11111111-1111-4111-8111-111111111111';
+  const room = 'mw-video-live-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const originalFetch = globalThis.fetch;
+  const rpcCalls = [];
+  globalThis.fetch = async (input, init = {}) => {
+    const address = String(input);
+    if (address.endsWith('/auth/v1/user')) return new Response(JSON.stringify({ id: viewerId }), { status: 200 });
+    if (address.includes('/rest/v1/mw_video_live_sessions?')) {
+      return new Response(JSON.stringify([{ host_id: hostId, scope: 'public', is_live: true }]), { status: 200 });
+    }
+    if (address.includes('/rest/v1/mw_live_room_settings?')) {
+      return new Response(JSON.stringify([{ settings: {} }]), { status: 200 });
+    }
+    if (address.includes('/rest/v1/mw_live_room_members?')) return new Response('[]', { status: 200 });
+    if (address.includes('/rest/v1/mw_profiles?')) {
+      return new Response(JSON.stringify([{ display_name: 'Viewer', avatar_url: '' }]), { status: 200 });
+    }
+    if (address.includes('/rest/v1/rpc/')) {
+      const body = JSON.parse(init.body || '{}');
+      rpcCalls.push({ address, body });
+      return new Response(JSON.stringify(address.endsWith('/mw_live_room_request') ? 'pending' : []), { status: 200 });
+    }
+    throw new Error(`Unexpected LIVE request API call: ${address}`);
+  };
+
+  try {
+    let status = 200, payload;
+    const response = {
+      headersSent: false,
+      setHeader() { return response; },
+      status(code) { status = code; return response; },
+      json(value) { payload = value; response.headersSent = true; return response; },
+    };
+    await liveRoom({
+      method: 'POST',
+      headers: { authorization: 'Bearer test-token', apikey: 'test-public-key' },
+      query: {},
+      body: { room, action: 'request' },
+    }, response);
+    assert.equal(status, 200);
+    assert.deepEqual(payload, { state: 'pending', invited: false });
+    assert.deepEqual(rpcCalls.at(-1), {
+      address: 'https://wpclkhgizbvxuvbhbwzs.supabase.co/rest/v1/rpc/mw_live_room_request',
+      body: { p_room_name: room, p_name: 'Viewer', p_avatar: '' },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('public Supabase content uses DOM text nodes and validates media URLs', () => {
