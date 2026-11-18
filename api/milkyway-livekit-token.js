@@ -66,11 +66,10 @@ async function liveToken(req, res, body) {
     const audio = /^mw-audio-/i.test(room);
     // Publish rights in a token:
     //  - the host broadcasting (role 'host'); the host's own account opening the room as a viewer stays a subscriber;
-    //  - a guest the host already APPROVED (state 'speaker' in the database, which only the host / server can set)
-    //    asking for a fresh publisher token with `stage: true` after the promotion.
+    //  - a guest the host already APPROVED (state 'speaker' in the database, which only the host / server can set).
     // Everyone else connects strictly as a silent subscriber: canPublish false, canPublishData true.
     const broadcasting = isHost && role === 'host';
-    const approvedGuest = !isHost && (body.stage === true || body.rejoin === true) && member?.state === 'speaker';
+    const approvedGuest = !isHost && member?.state === 'speaker';
     const sources = broadcasting ? (audio ? [MIC] : [CAMERA, MIC])
       : approvedGuest ? (audio ? (member.host_muted ? [] : [MIC]) : (member.host_muted ? [CAMERA] : [CAMERA, MIC]))
       : [];

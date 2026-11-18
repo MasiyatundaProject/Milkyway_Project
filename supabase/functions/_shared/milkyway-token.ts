@@ -91,7 +91,7 @@ export async function milkywayToken(request: Request) {
         }
         const [member] = isHost ? [] : await query(`rest/v1/mw_live_room_members?room_name=eq.${encodeURIComponent(roomName)}&user_id=eq.${account.id}&select=state,host_muted&limit=1`);
         const broadcasting = body.role === 'host' && isHost;
-        const approvedGuest = !isHost && (body.stage === true || body.rejoin === true) && member?.state === 'speaker';
+        const approvedGuest = !isHost && member?.state === 'speaker';
         const sources = broadcasting
           ? (audioOnly ? [2] : [1, 2])
           : approvedGuest

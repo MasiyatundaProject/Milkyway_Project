@@ -432,7 +432,8 @@ test('LIVE guest stage grants publisher permissions and renders allocated guest 
   const liveSession = readFileSync(new URL('../milkyway/app/ui/live-session.js', import.meta.url), 'utf8');
   assert.match(roomApi, /setPublish\(room\.roomName, userId, true, room\.audio\)/);
   assert.match(roomApi, /canPublish: sources\.length > 0, canPublishData: true, canPublishSources: sources/);
-  assert.match(tokenApi, /body\.stage === true[\s\S]*member\?\.state === 'speaker'/);
+  assert.match(tokenApi, /const approvedGuest = !isHost && member\?\.state === 'speaker'/);
+  assert.doesNotMatch(tokenApi, /body\.stage === true[\s\S]*member\?\.state === 'speaker'/);
   assert.match(tokenApi, /approvedGuest \? \(audio \? \(member\.host_muted \? \[\] : \[MIC\]\) : \(member\.host_muted \? \[CAMERA\] : \[CAMERA, MIC\]\)\)/);
   assert.match(liveView, /const guestSeats = host && settings\.showGuestSlots[\s\S]*data-seat/);
   assert.match(liveControls, /toggleRow\(t\('showGuestSlots'\)/);
@@ -696,12 +697,17 @@ test('LIVE settings schema and follower post notifications have an idempotent Re
 
 test('LIVE room table privileges are granted to authenticated users and limited to active rooms by RLS', () => {
   const migration = readFileSync(new URL('../supabase/migrations/20261125_milkyway_live_room_rls.sql', import.meta.url), 'utf8');
+  const requestMigration = readFileSync(new URL('../supabase/migrations/20261130_milkyway_live_member_request_rls.sql', import.meta.url), 'utf8');
   const repair = readFileSync(new URL('../supabase/milkyway-schema-repair.sql', import.meta.url), 'utf8');
   assert.match(migration, /grant select, insert, update, delete[\s\S]*mw_live_room_settings, public\.mw_live_room_members, public\.mw_live_room_messages[\s\S]*to authenticated/i);
   assert.match(migration, /create or replace function public\.mw_live_room_is_active\(room text\)[\s\S]*session\.is_live is true/i);
   assert.match(migration, /create policy mw_live_members_self[\s\S]*user_id = auth\.uid\(\)[\s\S]*state in \('viewer', 'pending'\)/i);
   assert.match(migration, /create policy mw_live_members_host[\s\S]*mw_live_room_is_active\(room_name\)[\s\S]*mw_is_live_host\(room_name\)/i);
   assert.match(migration, /create policy mw_live_messages_delete_host[\s\S]*for delete to authenticated[\s\S]*mw_is_live_host\(room_name\)/i);
+  assert.match(requestMigration, /create policy mw_live_members_self_insert[\s\S]*for insert to authenticated[\s\S]*state in \('viewer', 'pending'\)/i);
+  assert.match(requestMigration, /create policy mw_live_members_self_update[\s\S]*for update to authenticated[\s\S]*state in \('viewer', 'pending'\)/i);
+  assert.match(requestMigration, /create policy mw_live_members_host_update[\s\S]*for update to authenticated[\s\S]*mw_is_live_host\(room_name\)/i);
+  assert.match(repair, /supabase\/migrations\/20261130_milkyway_live_member_request_rls\.sql/);
   assert.match(repair, /supabase\/migrations\/20261125_milkyway_live_room_rls\.sql/);
 });
 
@@ -777,6 +783,7 @@ test('LIVE token keeps viewers subscribed until the server records host approval
     assert.equal((await call({ stage: true })).canPublish, false, 'a viewer cannot self-promote by requesting a stage token');
     memberState = 'speaker';
     assert.equal((await call({ stage: true })).canPublish, true, 'the server grants publishing only after the member is approved');
+    assert.equal((await call({})).canPublish, true, 'an approved guest receives publishing rights even without a client stage flag');
   } finally {
     globalThis.fetch = originalFetch;
     for (const [key, value] of Object.entries(previousEnv)) {
