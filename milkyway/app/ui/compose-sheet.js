@@ -252,12 +252,15 @@ export class ComposeSheet {
       const media_type = video ? 'video' : media_url ? 'image' : null;
       const author_name = profiles.peek(auth.userId)?.name || auth.name;
       phase = 'saving post details';
-      const { error } = await sb.from('mw_posts').insert({
+      const { data: savedPost, error } = await sb.from('mw_posts').insert({
         author_id: auth.userId, author_name, caption: caption || null, media_url, media_type,
         media_items: mediaItems, media_preview_items: mediaPreviewItems, audio_url, slideshow_style: this.style.value,
         scheduled_at: scheduledAt,
-      });
+      }).select('id,author_id,created_at').single();
       if (error) throw error;
+      if (!savedPost?.id || savedPost.author_id !== auth.userId) {
+        throw new Error('Supabase did not return the saved post.');
+      }
       this.caption.value = ''; this.#releaseMedia(); this.#pickAudio(null);
       this.preview.replaceChildren(); this.message.textContent = '';
       this.sheet.close();

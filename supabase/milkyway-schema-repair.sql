@@ -4212,6 +4212,31 @@ drop function if exists public.mw_repair_add(text, text, text, text);
 drop function if exists public.mw_repair_has(text, text);
 drop function if exists public.mw_repair_try(text);
 
+-- ===============================================================================================================
+-- supabase/migrations/20261129_milkyway_post_publish_permissions.sql
+-- ===============================================================================================================
+grant insert (
+  author_id, author_name, caption, media_url, media_type,
+  media_items, media_preview_items, audio_url, slideshow_style, scheduled_at
+) on public.mw_posts to authenticated;
+
+drop policy if exists mw_posts_insert_own on public.mw_posts;
+create policy mw_posts_insert_own on public.mw_posts
+  for insert to authenticated
+  with check (
+    author_id = (select auth.uid())
+    and not exists (
+      select 1
+      from public.mw_profiles profile
+      where profile.id = (select auth.uid())
+        and (
+          coalesce((to_jsonb(profile)->>'is_banned')::boolean, false)
+          or (to_jsonb(profile)->>'suspended_until' is not null
+            and (to_jsonb(profile)->>'suspended_until')::timestamptz > now())
+        )
+    )
+  );
+
 commit;
 
 -- Make the API see the new functions and columns right away (fixes "Could not find the function … in the schema cache").

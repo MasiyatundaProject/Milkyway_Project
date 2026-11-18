@@ -547,6 +547,7 @@ test('composer and post viewer support client-assisted photo slideshows with opt
 test('post publishing migration and errors cover slideshow schema and network failures', () => {
   const compose = readFileSync(new URL('../milkyway/app/ui/compose-sheet.js', import.meta.url), 'utf8');
   const migration = readFileSync(new URL('../supabase/migrations/20261117_milkyway_post_slideshows.sql', import.meta.url), 'utf8');
+  const publishMigration = readFileSync(new URL('../supabase/migrations/20261129_milkyway_post_publish_permissions.sql', import.meta.url), 'utf8');
   const repair = readFileSync(new URL('../supabase/milkyway-schema-repair.sql', import.meta.url), 'utf8');
   assert.match(migration, /add column if not exists media_items jsonb not null default '\[\]'::jsonb/i);
   assert.match(migration, /add column if not exists audio_url text/i);
@@ -554,6 +555,12 @@ test('post publishing migration and errors cover slideshow schema and network fa
   assert.match(migration, /validate constraint mw_posts_slideshow_style_check/i);
   assert.match(migration, /notify pgrst, 'reload schema'/i);
   assert.match(repair, /supabase\/migrations\/20261117_milkyway_post_slideshows\.sql/);
+  assert.match(publishMigration, /grant insert \([\s\S]*scheduled_at[\s\S]*?\)\s*on public\.mw_posts to authenticated/i);
+  assert.match(publishMigration, /create policy mw_posts_insert_own[\s\S]*author_id = \(select auth\.uid\(\)\)/i);
+  assert.match(publishMigration, /coalesce\(\(to_jsonb\(profile\)->>'is_banned'\)::boolean, false\)/i);
+  assert.match(repair, /supabase\/migrations\/20261129_milkyway_post_publish_permissions\.sql/);
+  assert.match(compose, /\.select\('id,author_id,created_at'\)\.single\(\)/);
+  assert.match(compose, /if \(!savedPost\?\.id \|\| savedPost\.author_id !== auth\.userId\)/);
   assert.match(compose, /const failedPhase = error\?\.publishPhase \|\| phase/);
   assert.match(compose, /postNetworkFailed/);
   assert.match(compose, /postSchemaFailed/);
