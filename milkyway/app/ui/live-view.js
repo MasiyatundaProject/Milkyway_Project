@@ -60,6 +60,7 @@ function liveChrome({ host = false } = {}) {
     micBtn, camBtn,
     host ? null : h('button', { class: 'icon-btn leave', type: 'button', 'data-act': 'leave-stage', 'aria-label': t('leaveStage'), title: t('leaveStage'), html: icon.leave }));
   const guestsBadge = h('span', { class: 'live-badge-count', hidden: true });
+  const seatCount = h('span', { class: 'live-seat-count', hidden: true, 'aria-live': 'polite' });
   // Viewers: a labelled pill in the bottom bar so joining as a guest is always obvious
   // (Request to join → Requested → on stage). It is never replaced by a view-only layout.
   const stageLabel = h('span', { class: 'stage-label' }, t('requestJoin'));
@@ -69,7 +70,7 @@ function liveChrome({ host = false } = {}) {
   const likeBtn = h('button', { class: 'icon-btn like', type: 'button', 'data-act': 'like', 'aria-label': 'Like', html: icon.heart });
   const bar = h('div', { class: 'live-bar' }, form,
     ...(host
-      ? [h('button', { class: 'icon-btn has-badge', type: 'button', 'data-act': 'guests', 'aria-label': t('guests'), title: t('guests'), html: icon.guests }, guestsBadge),
+      ? [h('button', { class: 'icon-btn has-badge', type: 'button', 'data-act': 'guests', 'aria-label': t('guests'), title: t('guests'), html: icon.guests }, seatCount, guestsBadge),
          h('button', { class: 'icon-btn', type: 'button', 'data-act': 'moderation', 'aria-label': t('moderation'), title: t('moderation'), html: icon.shield }),
          h('button', { class: 'icon-btn', type: 'button', 'data-act': 'settings', 'aria-label': t('liveSettings'), title: t('liveSettings'), html: icon.gear })]
       : [stageBtn, giftBtn, likeBtn]),
@@ -78,7 +79,7 @@ function liveChrome({ host = false } = {}) {
     h('div', { class: 'live-host', 'data-act': 'profile' }, avatarNode, h('div', {}, name, h('small', { class: 'live-tag' }, t('live'))), host ? null : follow),
     viewers, close);
   const node = h('section', { class: 'slide live-slide' }, grid, brandMark('live'), h('div', { class: 'shade' }), top, tools, pinned, comments, hearts, banner, state, host ? requests : null, bar);
-  node._refs = { avatarNode, name, follow, viewers: viewers.querySelector('b'), viewersWrap: viewers, cover, background, stage, guests, grid, hostLabel, requests, pinned, comments, hearts, banner, state, input, form, tools, micBtn, camBtn, stageBtn, stageLabel, giftBtn, likeBtn, guestsBadge };
+  node._refs = { avatarNode, name, follow, viewers: viewers.querySelector('b'), viewersWrap: viewers, cover, background, stage, guests, grid, hostLabel, requests, pinned, comments, hearts, banner, state, input, form, tools, micBtn, camBtn, stageBtn, stageLabel, giftBtn, likeBtn, guestsBadge, seatCount };
   // Re-arrange the grid whenever a guest tile appears or leaves (tiles come from both room status and video tracks).
   new MutationObserver(() => layoutGrid(node)).observe(guests, { childList: true });
   return node;
@@ -249,7 +250,9 @@ function applyRoom(slide, session, status) {
 
   // Guest boxes
   const speakers = roomMembers(status).filter(member => member.state === 'speaker');
-  const guestSeats = host && settings.showGuestSlots ? Math.max(0, Math.min(8, Number(settings.layout || 1) - 1)) : 0;
+  const guestSeats = settings.showGuestSlots ? Math.max(0, Math.min(8, Number(settings.layout || 9) - 1)) : 0;
+  r.seatCount.hidden = !host || !settings.showGuestSlots;
+  r.seatCount.textContent = `${speakers.length}/${guestSeats}`;
   const orderedTiles = [];
   for (const member of speakers) {
     const tile = guestTile(slide, member.userId, member.name);
@@ -270,13 +273,18 @@ function applyRoom(slide, session, status) {
     if (speakers[seat - 1]) continue;
     let placeholder = r.guests.querySelector(`[data-seat="${seat}"]`);
     if (!placeholder) {
+      const label = host ? t('invite') : t('requestJoin');
+      const unavailable = !host && (session.stage === 'joining' || session.stage === 'guest'
+        || session.settings.admission === 'broadcast' || session.settings.allowRequests === false);
       placeholder = h('button', {
         class: 'live-guest live-guest-slot', type: 'button', role: 'listitem', 'data-seat': seat,
-        'data-act': 'guests', 'data-no-swipe': true, 'aria-label': `${t('invite')} · ${t('seats')} ${seat}`,
-        title: t('invite'),
+        'data-act': host ? 'guests' : 'stage', 'data-no-swipe': true, 'aria-label': `${label} · ${t('seats')} ${seat}`,
+        title: label, disabled: unavailable,
       }, h('span', { class: 'live-slot-plus', 'aria-hidden': 'true' }, '+'),
-      h('span', { class: 'live-guest-name' }, t('invite')));
+      h('span', { class: 'live-guest-name' }, label));
     }
+    if (!host) placeholder.disabled = session.stage === 'joining' || session.stage === 'guest'
+      || session.settings.admission === 'broadcast' || session.settings.allowRequests === false;
     orderedTiles.push(placeholder);
   }
   for (const tile of [...r.guests.children]) {
@@ -678,8 +686,8 @@ export class LiveView {
       if (session.stage === 'joining' || session.stage === 'guest') return;
       if (session.stage === 'invited') { await session.acceptInvite(); return; }
       if (slide) slide._selfCancelled = false;
-      await session.requestStage();
-      toast(t('requestSent'));
+      const state = await session.requestStage();
+      toast(state === 'speaker' ? t('joinedStage') : t('requestSent'));
     } catch (error) { toast(error?.message || t('liveUnavailable')); }
   }
 
@@ -716,7 +724,7 @@ export class LiveView {
       return group;
     };
     const mode = choices('gl-modes', t('goLive'), [['video', t('video')], ['audio', t('audio')]], key => key === 'video' ? icon.camera : icon.mic);
-    const guests = choices('gl-grid', t('admission'), [['approval', t('admissionApproval')], ['broadcast', t('admissionOff')]]);
+    const guests = choices('gl-grid', t('admission'), [['approval', t('admissionApproval')], ['open', t('admissionDirect')], ['broadcast', t('admissionOff')]]);
     const comments = choices('gl-grid', t('comments2'), [['everyone', t('commentsEveryone')], ['followers', t('commentsFollowers')], ['off', t('commentsOff')]]);
     const group = (emoji, label, node) => h('div', { class: 'gl-group' }, h('small', { class: 'gl-label' }, h('span', { 'aria-hidden': 'true' }, emoji), label), node);
     const start = h('button', { class: 'gl-start', type: 'submit' }, h('i', { class: 'gl-dot', 'aria-hidden': 'true' }), t('goLive'));

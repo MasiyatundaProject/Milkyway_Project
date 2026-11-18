@@ -10,7 +10,7 @@ import { livekit, livekitConfigured, retryRoomCleanups, closeRoom, CAMERA, MIC }
 //   POST /api/milkyway-live-room { room, action: 'status' | 'request' | 'approve' | ... }
 
 const ROOM = /^mw-(audio|video)-live-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
-const ADMISSIONS = ['approval', 'broadcast']; // guests only ever reach the stage through the host's approval
+const ADMISSIONS = ['approval', 'open', 'broadcast'];
 const COMMENT_MODES = ['everyone', 'followers', 'off'];
 const SLOW_MODES = [0, 3, 10, 30, 60];
 const INVITE_TTL_MS = 3 * 60_000;
@@ -178,8 +178,8 @@ async function handle({ ctx, body, method }) {
   if (!room.record.is_live && action !== 'end') throw new ApiError(404, 'This Live session has ended.');
 
   // ---- Audience actions -----------------------------------------------------------------------------------
-  // Stage states: viewer (silent subscriber) → pending (asked to join) → speaker (approved by the host, may publish).
-  // Only host actions (approve, or the host's app accepting someone the host invited) ever write 'speaker'.
+  // Stage states: viewer (silent subscriber) → pending (asked to join) → speaker (may publish).
+  // Only server-controlled host approval or open-seat allocation can write 'speaker'.
   const ownRow = async () => (await ctx.rest(`${memberPath(room.roomName, ctx.user.id)}&select=state,host_muted&limit=1`) || [])[0] || null;
 
   if (action === 'request' || action === 'accept-invite') {
@@ -188,10 +188,28 @@ async function handle({ ctx, body, method }) {
     if (settings.blockedIds.includes(me)) throw new ApiError(403, kickedMessage);
     const existing = await ownRow();
     if (existing?.state === 'speaker') return { state: 'speaker' };
-    if (existing?.state === 'pending') return { state: 'pending' };
     const invited = !!freshInvites(settings.invites)[me];
     if (action === 'accept-invite' && !invited) throw new ApiError(410, 'This invitation has expired.');
+    if (existing?.state === 'pending' && settings.admission !== 'open') return { state: 'pending' };
     if (!invited && (settings.admission === 'broadcast' || settings.allowRequests === false)) throw new ApiError(403, 'The host is not taking guest requests right now.');
+    if (action === 'request' && !invited && settings.admission === 'open') {
+      const user = await whoAmI(ctx);
+      const granted = await setPublish(room.roomName, me, true, room.audio);
+      if (!granted) throw new ApiError(409, 'You are no longer watching this LIVE.');
+      try {
+        await ctx.rpc('mw_live_room_allocate_guest_seat', {
+          p_room_name: room.roomName,
+          p_user_id: me,
+          p_name: user.name,
+          p_avatar: user.avatar,
+        });
+      } catch (error) {
+        await revokePublish(room.roomName, me, room.audio);
+        throw error;
+      }
+      return { state: 'speaker', invited: false };
+    }
+    if (existing?.state === 'pending') return { state: 'pending' };
     const seated = await speakersOf(ctx, room.roomName);
     if (seated.length >= settings.layout - 1) throw new ApiError(409, 'All guest seats are full.');
     const user = await whoAmI(ctx);
@@ -268,12 +286,10 @@ async function handle({ ctx, body, method }) {
   if (action === 'approve') {
     const userId = target();
     if (settings.blockedIds.includes(userId)) throw new ApiError(409, 'Unblock this person before inviting them on stage.');
-    const [member] = await ctx.rest(`${memberPath(room.roomName, userId)}&select=user_id,state&limit=1`) || [];
+    const [member] = await ctx.rest(`${memberPath(room.roomName, userId)}&select=user_id,state,name,avatar&limit=1`) || [];
     if (!member) throw new ApiError(404, 'That person is not in this Live.');
     if (member.state === 'speaker') return { ok: true, state: 'speaker' };
     if (member.state !== 'pending') throw new ApiError(409, 'This person cancelled their request.');
-    const speakers = await speakersOf(ctx, room.roomName);
-    if (speakers.length >= settings.layout - 1) throw new ApiError(409, 'All guest seats are full. Add more guest seats in Guest settings.');
     // Upgrade the guest's live LiveKit connection to publisher. LiveKit answers "not found" when they already left.
     const granted = await setPublish(room.roomName, userId, true, room.audio);
     if (!granted) {
@@ -281,7 +297,12 @@ async function handle({ ctx, body, method }) {
       throw new ApiError(409, 'This person is no longer watching.');
     }
     try {
-      await ctx.rest(memberPath(room.roomName, userId), { method: 'PATCH', body: { state: 'speaker', host_muted: false, updated_at: new Date().toISOString() } });
+      await ctx.rpc('mw_live_room_allocate_guest_seat', {
+        p_room_name: room.roomName,
+        p_user_id: userId,
+        p_name: member.name || '',
+        p_avatar: member.avatar || '',
+      });
     } catch (error) {
       await revokePublish(room.roomName, userId, room.audio);
       throw error;

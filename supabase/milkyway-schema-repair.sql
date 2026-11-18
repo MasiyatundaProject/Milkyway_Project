@@ -494,6 +494,7 @@ select public.mw_repair_add('mw_room_cleanup_queue', 'lease_until', 'timestamptz
 select public.mw_repair_add('mw_room_cleanup_queue', 'last_error', 'text not null default ''''', 'text not null default ''''');
 select public.mw_repair_key('mw_room_cleanup_queue', array['room_name']);
 select public.mw_repair_key('mw_room_cleanup_queue', array['room_name']);
+select public.mw_repair_key('mw_room_cleanup_queue', array['room_name']);
 -- mw_live_room_likes
 select public.mw_repair_add('mw_live_room_likes', 'id', 'uuid', 'uuid');
 select public.mw_repair_add('mw_live_room_likes', 'room_name', 'text', 'text');
@@ -4200,21 +4201,75 @@ revoke all on function public.mw_room_cleanup_enqueue(text) from public, anon;
 grant execute on function public.mw_room_cleanup_enqueue(text) to authenticated;
 notify pgrst, 'reload schema';
 
--- ---------------------------------------------------------------------------------------------------------------
--- 5. Final hardening and cleanup
--- ---------------------------------------------------------------------------------------------------------------
-alter table public.mw_messages enable row level security;
-revoke all on public.mw_messages from anon;
-drop function if exists public.mw_repair_relax(text, text[]);
-drop function if exists public.mw_repair_copy(text, text, text, boolean);
-drop function if exists public.mw_repair_key(text, text[]);
-drop function if exists public.mw_repair_add(text, text, text, text);
-drop function if exists public.mw_repair_has(text, text);
-drop function if exists public.mw_repair_try(text);
+-- ===============================================================================================================
+-- supabase/migrations/20261128_milkyway_room_cleanup_enqueue_repair.sql
+-- ===============================================================================================================
+-- Reinstall the authenticated DM/live cleanup RPC and refresh PostgREST's function cache.
+create table if not exists public.mw_room_cleanup_queue (
+  room_name text primary key,
+  requested_by uuid not null references auth.users(id) on delete cascade,
+  requested_at timestamptz not null default now(),
+  attempts integer not null default 0,
+  next_attempt_at timestamptz not null default now(),
+  lease_id uuid,
+  lease_until timestamptz,
+  last_error text not null default ''
+);
+
+alter table public.mw_room_cleanup_queue
+  add column if not exists room_name text,
+  add column if not exists requested_by uuid references auth.users(id) on delete cascade,
+  add column if not exists requested_at timestamptz not null default now(),
+  add column if not exists attempts integer not null default 0,
+  add column if not exists next_attempt_at timestamptz not null default now(),
+  add column if not exists lease_id uuid,
+  add column if not exists lease_until timestamptz,
+  add column if not exists last_error text not null default '';
+
+create unique index if not exists mw_room_cleanup_queue_room_name_uidx
+  on public.mw_room_cleanup_queue (room_name);
+grant usage on schema public to authenticated;
+alter table public.mw_room_cleanup_queue enable row level security;
+revoke all on public.mw_room_cleanup_queue from public, anon, authenticated;
+
+create or replace function public.mw_room_cleanup_enqueue(p_room_name text)
+returns void
+language plpgsql security definer set search_path = ''
+as $$
+declare
+  me uuid := auth.uid();
+  owner_allowed boolean := false;
+  call_id uuid;
+begin
+  if me is null then raise exception 'Sign in first.' using errcode = '28000'; end if;
+  if p_room_name ~* '^mw-(audio|video)-live-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$' then
+    select exists (
+      select 1 from public.mw_video_live_sessions
+      where room_name = p_room_name and host_id = me
+    ) into owner_allowed;
+  elsif p_room_name ~* '^mw-conversation-(audio|video)-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$' then
+    call_id := substring(p_room_name from '([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$')::uuid;
+    select exists (
+      select 1 from public.mw_dm_calls
+      where id = call_id and (caller_id = me or callee_id = me)
+    ) into owner_allowed;
+  end if;
+  if not owner_allowed then raise exception 'Not allowed to close this room.' using errcode = '42501'; end if;
+  insert into public.mw_room_cleanup_queue(room_name, requested_by)
+    values (p_room_name, me)
+    on conflict (room_name) do update set
+      requested_by = excluded.requested_by,
+      requested_at = now(), next_attempt_at = now(), lease_id = null, lease_until = null, last_error = '';
+end
+$$;
+revoke all on function public.mw_room_cleanup_enqueue(text) from public, anon;
+grant execute on function public.mw_room_cleanup_enqueue(text) to authenticated;
+notify pgrst, 'reload schema';
 
 -- ===============================================================================================================
 -- supabase/migrations/20261129_milkyway_post_publish_permissions.sql
 -- ===============================================================================================================
+-- Allow signed-in users to publish their own posts while keeping protected accounts unable to publish.
 grant insert (
   author_id, author_name, caption, media_url, media_type,
   media_items, media_preview_items, audio_url, slideshow_style, scheduled_at
@@ -4236,15 +4291,105 @@ create policy mw_posts_insert_own on public.mw_posts
         )
     )
   );
+notify pgrst, 'reload schema';
 
-commit;
+-- ===============================================================================================================
+-- supabase/migrations/20261130_milkyway_live_guest_request_rpc.sql
+-- ===============================================================================================================
+-- Persist guest requests through a narrowly scoped RPC so old/conflicting member RLS rules
+-- cannot turn a valid authenticated request into an opaque PostgREST 403.
+create or replace function public.mw_live_room_request(
+  p_room_name text,
+  p_name text,
+  p_avatar text
+)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  me text := auth.uid()::text;
+  live_host text;
+  room_settings jsonb := '{}'::jsonb;
+  current_state text;
+  invited_at numeric;
+begin
+  if me is null then
+    raise exception 'Sign in first.' using errcode = '28000';
+  end if;
 
--- Make the API see the new functions and columns right away (fixes "Could not find the function … in the schema cache").
+  select session.host_id::text
+    into live_host
+  from public.mw_video_live_sessions as session
+  where session.room_name = p_room_name
+    and session.is_live is true;
+
+  if live_host is null then
+    raise exception 'This Live session has ended.' using errcode = 'P0002';
+  end if;
+  if live_host = me then
+    raise exception 'The host is already on stage.' using errcode = '42501';
+  end if;
+
+  select coalesce(settings.settings, '{}'::jsonb)
+    into room_settings
+  from public.mw_live_room_settings as settings
+  where settings.room_name = p_room_name;
+
+  if coalesce(room_settings #>> array['invites', lower(me)], '') ~ '^[0-9]+$' then
+    invited_at := (room_settings #>> array['invites', lower(me)])::numeric;
+  end if;
+
+  if (invited_at is null or floor(extract(epoch from now()) * 1000) - invited_at >= 180000)
+     and (coalesce(room_settings ->> 'admission', 'approval') = 'broadcast'
+       or room_settings ->> 'allowRequests' = 'false') then
+    raise exception 'The host is not taking guest requests right now.' using errcode = '42501';
+  end if;
+  if coalesce(room_settings -> 'blockedIds', '[]'::jsonb) ? lower(me) then
+    raise exception 'The host removed you from this LIVE.' using errcode = '42501';
+  end if;
+
+  select member.state
+    into current_state
+  from public.mw_live_room_members as member
+  where member.room_name = p_room_name
+    and member.user_id::text = me
+  for update;
+
+  if current_state = 'speaker' then
+    return 'speaker';
+  end if;
+  if current_state = 'pending' then
+    return 'pending';
+  end if;
+
+  insert into public.mw_live_room_members (
+    room_name, user_id, name, avatar, state, host_muted, updated_at
+  )
+  values (
+    p_room_name, me::uuid, left(coalesce(nullif(p_name, ''), 'MilkyWay user'), 80),
+    left(coalesce(p_avatar, ''), 500), 'pending', false, now()
+  )
+  on conflict (room_name, user_id) do update
+    set name = excluded.name,
+        avatar = excluded.avatar,
+        state = 'pending',
+        host_muted = false,
+        updated_at = now();
+
+  return 'pending';
+end
+$$;
+
+revoke all on function public.mw_live_room_request(text, text, text) from public, anon;
+grant execute on function public.mw_live_room_request(text, text, text) to authenticated;
+notify pgrst, 'reload schema';
+
 -- ===============================================================================================================
 -- supabase/migrations/20261130_milkyway_live_member_request_rls.sql
 -- ===============================================================================================================
-begin;
-
+-- Make LIVE request/approval access explicit and safe across deployments with stale member policies.
 alter table public.mw_live_room_members enable row level security;
 revoke all on public.mw_live_room_members from public, anon;
 grant select, insert, update, delete on public.mw_live_room_members to authenticated;
@@ -4307,14 +4452,13 @@ create policy mw_live_members_host_delete on public.mw_live_room_members
     public.mw_live_room_is_active(room_name)
     and public.mw_is_live_host(room_name)
   );
-
-commit;
+notify pgrst, 'reload schema';
 
 -- ===============================================================================================================
--- supabase/migrations/20261130_milkyway_live_guest_request_rpc.sql
+-- supabase/migrations/20261201_milkyway_live_guest_request_uuid_fix.sql
 -- ===============================================================================================================
-begin;
-
+-- Reinstall the guest-request RPC with text-normalized ID comparisons for databases
+-- where legacy member/session ID columns differ between text and uuid.
 create or replace function public.mw_live_room_request(
   p_room_name text,
   p_name text,
@@ -4328,65 +4472,109 @@ as $$
 declare
   me text := auth.uid()::text;
   live_host text;
+  live_room_id text;
   room_settings jsonb := '{}'::jsonb;
   current_state text;
+  invite_value text;
   invited_at numeric;
 begin
   if me is null then
     raise exception 'Sign in first.' using errcode = '28000';
   end if;
-  select session.host_id::text into live_host
+
+  select session.host_id::text,
+         session.id::text
+    into live_host,
+         live_room_id
   from public.mw_video_live_sessions as session
-  where session.room_name = p_room_name and session.is_live is true;
-  if live_host is null then
+  where session.room_name = p_room_name
+    and session.is_live is true;
+
+  if live_host is null or live_room_id is null then
     raise exception 'This Live session has ended.' using errcode = 'P0002';
   end if;
-  if live_host = me then
+  if live_host::text = me::text then
     raise exception 'The host is already on stage.' using errcode = '42501';
   end if;
-  select coalesce(settings.settings, '{}'::jsonb) into room_settings
+
+  select coalesce(settings.settings, '{}'::jsonb)
+    into room_settings
   from public.mw_live_room_settings as settings
   where settings.room_name = p_room_name;
-  if coalesce(room_settings #>> array['invites', lower(me)], '') ~ '^[0-9]+$' then
-    invited_at := (room_settings #>> array['invites', lower(me)])::numeric;
+
+  if jsonb_typeof(room_settings -> 'invites') = 'object' then
+    select invite.invited_at_text::text
+      into invite_value
+    from jsonb_each_text(room_settings -> 'invites') as invite(user_id_text, invited_at_text)
+    where lower(invite.user_id_text::text) = lower(me::text)
+    limit 1;
   end if;
+
+  if coalesce(invite_value, '') ~ '^[0-9]+$' then
+    invited_at := invite_value::numeric;
+  end if;
+
   if (invited_at is null or floor(extract(epoch from now()) * 1000) - invited_at >= 180000)
      and (coalesce(room_settings ->> 'admission', 'approval') = 'broadcast'
        or room_settings ->> 'allowRequests' = 'false') then
     raise exception 'The host is not taking guest requests right now.' using errcode = '42501';
   end if;
-  if coalesce(room_settings -> 'blockedIds', '[]'::jsonb) ? lower(me) then
+
+  if exists (
+    select 1
+    from jsonb_array_elements_text(
+      case
+        when jsonb_typeof(room_settings -> 'blockedIds') = 'array'
+          then room_settings -> 'blockedIds'
+        else '[]'::jsonb
+      end
+    ) as blocked(user_id)
+    where lower(blocked.user_id::text) = lower(me::text)
+  ) then
     raise exception 'The host removed you from this LIVE.' using errcode = '42501';
   end if;
-  select member.state into current_state
+
+  select member.state
+    into current_state
   from public.mw_live_room_members as member
-  where member.room_name = p_room_name and member.user_id::text = me
+  where member.room_name = p_room_name
+    and member.user_id::text = me::text
   for update;
-  if current_state = 'speaker' then return 'speaker'; end if;
-  if current_state = 'pending' then return 'pending'; end if;
+
+  if current_state = 'speaker' then
+    return 'speaker';
+  end if;
+  if current_state = 'pending' then
+    return 'pending';
+  end if;
+
   insert into public.mw_live_room_members (
-    room_name, user_id, name, avatar, state, host_muted, updated_at
+    room_id, room_name, user_id, name, avatar, state, host_muted, updated_at
   )
   values (
-    p_room_name, me::uuid, left(coalesce(nullif(p_name, ''), 'MilkyWay user'), 80),
+    live_room_id::uuid, p_room_name, me::uuid,
+    left(coalesce(nullif(p_name, ''), 'MilkyWay user'), 80),
     left(coalesce(p_avatar, ''), 500), 'pending', false, now()
   )
   on conflict (room_name, user_id) do update
-    set name = excluded.name, avatar = excluded.avatar, state = 'pending',
-        host_muted = false, updated_at = now();
+    set name = excluded.name,
+        avatar = excluded.avatar,
+        state = 'pending',
+        host_muted = false,
+        updated_at = now();
+
   return 'pending';
 end
 $$;
+
 revoke all on function public.mw_live_room_request(text, text, text) from public, anon;
 grant execute on function public.mw_live_room_request(text, text, text) to authenticated;
-
-commit;
 notify pgrst, 'reload schema';
 
+-- ===============================================================================================================
 -- supabase/migrations/20261202_milkyway_live_member_realtime.sql
+-- ===============================================================================================================
 -- Publish LIVE member changes so hosts receive guest requests and decisions immediately.
-begin;
-
 do $$
 begin
   if exists (select 1 from pg_publication where pubname = 'supabase_realtime')
@@ -4402,4 +4590,148 @@ begin
 end
 $$;
 
+-- ===============================================================================================================
+-- supabase/migrations/20261205_milkyway_live_guest_seat_allocation.sql
+-- ===============================================================================================================
+-- Allocate a guest seat atomically so concurrent joins and host approvals cannot overbook the stage.
+create or replace function public.mw_live_room_allocate_guest_seat(
+  p_room_name text,
+  p_user_id text,
+  p_name text,
+  p_avatar text
+)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  me text := auth.uid()::text;
+  live_host text;
+  live_room_id text;
+  room_settings jsonb := '{}'::jsonb;
+  current_state text;
+  seat_limit integer := 8;
+  seated_count integer;
+begin
+  if me is null then
+    raise exception 'Sign in first.' using errcode = '28000';
+  end if;
+  if coalesce(p_user_id, '') !~* '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$' then
+    raise exception 'Invalid participant.' using errcode = '22023';
+  end if;
+
+  -- The room row is the shared lock for every seat allocation in this session.
+  select session.host_id::text, session.id::text
+    into live_host, live_room_id
+  from public.mw_video_live_sessions as session
+  where session.room_name = p_room_name
+    and session.is_live is true
+  for update;
+
+  if live_host is null or live_room_id is null then
+    raise exception 'This Live session has ended.' using errcode = 'P0002';
+  end if;
+  if lower(p_user_id) = lower(live_host) then
+    raise exception 'The host is already on stage.' using errcode = '42501';
+  end if;
+  if lower(me) <> lower(live_host) and lower(p_user_id) <> lower(me) then
+    raise exception 'Only the host can seat another participant.' using errcode = '42501';
+  end if;
+
+  select coalesce(settings.settings, '{}'::jsonb)
+    into room_settings
+  from public.mw_live_room_settings as settings
+  where settings.room_name = p_room_name;
+
+  if exists (
+    select 1
+    from jsonb_array_elements_text(
+      case
+        when jsonb_typeof(room_settings -> 'blockedIds') = 'array'
+          then room_settings -> 'blockedIds'
+        else '[]'::jsonb
+      end
+    ) as blocked(user_id)
+    where lower(blocked.user_id) = lower(p_user_id)
+  ) then
+    raise exception 'Unblock this person before inviting them on stage.' using errcode = '42501';
+  end if;
+
+  select member.state
+    into current_state
+  from public.mw_live_room_members as member
+  where member.room_name = p_room_name
+    and lower(member.user_id::text) = lower(p_user_id)
+  for update;
+
+  if current_state = 'speaker' then
+    return 'speaker';
+  end if;
+  if lower(me) = lower(live_host) then
+    if current_state is distinct from 'pending' then
+      raise exception 'This person cancelled their request.' using errcode = '23514';
+    end if;
+  elsif coalesce(room_settings ->> 'admission', 'approval') <> 'open'
+      or coalesce(room_settings ->> 'allowRequests', 'true') = 'false' then
+    raise exception 'The host is not taking guest requests right now.' using errcode = '42501';
+  elsif current_state is not null and current_state not in ('viewer', 'pending') then
+    raise exception 'This person is not available to join.' using errcode = '23514';
+  end if;
+
+  seat_limit := greatest(1, least(8,
+    (case
+      when coalesce(room_settings ->> 'layout', '') ~ '^[0-9]+$' then (room_settings ->> 'layout')::integer
+      else 9
+    end) - 1
+  ));
+  select count(*)::integer
+    into seated_count
+  from public.mw_live_room_members as member
+  where member.room_name = p_room_name
+    and member.state = 'speaker'
+    and lower(member.user_id::text) <> lower(p_user_id);
+
+  if seated_count >= seat_limit then
+    raise exception 'All guest seats are full.' using errcode = '23514';
+  end if;
+
+  insert into public.mw_live_room_members (
+    room_id, room_name, user_id, name, avatar, state, host_muted, updated_at
+  )
+  values (
+    live_room_id::uuid, p_room_name, p_user_id::uuid,
+    left(coalesce(nullif(p_name, ''), 'MilkyWay user'), 80),
+    left(coalesce(p_avatar, ''), 500), 'speaker', false, now()
+  )
+  on conflict (room_name, user_id) do update
+    set name = excluded.name,
+        avatar = excluded.avatar,
+        state = 'speaker',
+        host_muted = false,
+        updated_at = now();
+
+  return 'speaker';
+end
+$$;
+
+revoke all on function public.mw_live_room_allocate_guest_seat(text, text, text, text) from public, anon;
+grant execute on function public.mw_live_room_allocate_guest_seat(text, text, text, text) to authenticated;
+notify pgrst, 'reload schema';
+
+-- ---------------------------------------------------------------------------------------------------------------
+-- 5. Final hardening and cleanup
+-- ---------------------------------------------------------------------------------------------------------------
+alter table public.mw_messages enable row level security;
+revoke all on public.mw_messages from anon;
+drop function if exists public.mw_repair_relax(text, text[]);
+drop function if exists public.mw_repair_copy(text, text, text, boolean);
+drop function if exists public.mw_repair_key(text, text[]);
+drop function if exists public.mw_repair_add(text, text, text, text);
+drop function if exists public.mw_repair_has(text, text);
+drop function if exists public.mw_repair_try(text);
+
 commit;
+
+-- Make the API see the new functions and columns right away (fixes "Could not find the function … in the schema cache").
+notify pgrst, 'reload schema';
