@@ -54,6 +54,7 @@ const defaults = {
     liveRoom: '/api/milkyway-live-room',
     wallet: '/api/milkyway-wallet',
     message: '/api/milkyway-message',
+    groups: '/api/milkyway-groups',
   },
   feed: {
     pageSize: 10,

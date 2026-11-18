@@ -6,9 +6,11 @@ import { inbox } from '../data/chats.js';
 import { profiles } from '../data/profiles.js';
 import { presence } from '../data/presence.js';
 import { loadThread, sendMessage, markRead, onMessage, deleteForMe, searchPeople } from '../data/messages.js';
+import { discoverGroups, joinGroup, loadGroups } from '../data/groups.js';
 import { Sheet } from './sheet.js';
 import { h, icon, ago, avatar, formatDateTime, toast } from './dom.js';
 import { calls } from './call-view.js';
+import { GroupChatSheet, GroupCreateSheet, joinAndOpenGroup } from './group-view.js';
 
 const phoneIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1L6.6 10.8z"/></svg>';
 const backIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.4 4.6 14 3.2 5.2 12l8.8 8.8 1.4-1.4L8 12z"/></svg>';
@@ -26,13 +28,24 @@ export class InboxView {
     this.sheet = new Sheet({ title: t('chats'), className: 'inbox-sheet' });
     this.active = h('p', { class: 'muted inbox-active' });
     this.list = h('div', { class: 'chat-list' });
+    this.groupList = h('div', { class: 'chat-list' });
+    this.groupSection = h('section', { class: 'inbox-group-section' }, h('h3', { class: 'group-section-title' }, t('groups')), this.groupList);
+    this.discoverBox = h('div', { class: 'inbox-group-discovery', hidden: true });
     this.searchBox = h('div', { class: 'stack', hidden: true });
     this.sheet.body.append(
       h('div', { class: 'inbox-tools' },
         this.active,
-        h('button', { class: 'pill-btn hot', type: 'button', onclick: () => this.#toggleSearch() }, h('span', { html: icon.plus }), t('newChat'))),
-      this.searchBox, this.list);
+        h('div', { class: 'inbox-actions' },
+          h('button', { class: 'pill-btn', type: 'button', onclick: () => this.#toggleDiscover() }, t('discoverGroups')),
+          h('button', { class: 'pill-btn', type: 'button', onclick: () => this.createGroup.open() }, h('span', { html: icon.plus }), t('createGroup')),
+          h('button', { class: 'pill-btn hot', type: 'button', onclick: () => this.#toggleSearch() }, h('span', { html: icon.plus }), t('newChat')))),
+      this.searchBox, this.discoverBox, this.groupSection, this.list);
     this.chat = new ChatSheet();
+    this.groupChat = new GroupChatSheet({ onChanged: () => this.#loadGroups() });
+    this.createGroup = new GroupCreateSheet(group => {
+      this.#loadGroups();
+      if (group?.id) this.groupChat.open(group);
+    });
     inbox.subscribe(rooms => this.#render(rooms));
     presence.subscribe(() => { this.active.textContent = presence.count ? `🟢 ${presence.count} ${t('activeUsers')}` : ''; });
     onMessage(() => {}); // opens the realtime connection so the inbox refreshes on new messages
@@ -42,8 +55,67 @@ export class InboxView {
     if (!inbox.value) this.list.replaceChildren(h('p', { class: 'muted center' }, t('loading')));
     inbox.load().then(value => { if (value === undefined) inbox.refresh().then(rooms => !rooms && this.#render([])); });
     inbox.refresh();
+    this.#loadGroups();
     presence.start();
     this.sheet.open();
+  }
+
+  async #loadGroups() {
+    try {
+      const groups = await loadGroups();
+      this.groupList.replaceChildren(...(groups.length ? groups.map(group => this.#groupRow(group)) : [h('p', { class: 'muted center' }, t('noGroups'))]));
+    } catch (error) {
+      this.groupList.replaceChildren(h('p', { class: 'muted center' }, error?.message || t('retry')));
+    }
+  }
+
+  #groupRow(group) {
+    const face = group.avatar_url
+      ? h('img', { class: 'group-list-avatar', src: group.avatar_url, alt: '', loading: 'lazy' })
+      : h('span', { class: 'group-list-avatar group-list-placeholder' }, '👥');
+    let statusAction;
+    if (group.join_status === 'active') {
+      statusAction = () => this.groupChat.open(group);
+    } else if (group.join_status === 'invited') {
+      statusAction = () => joinAndOpenGroup(group, joined => { this.#loadGroups(); this.groupChat.open(joined); }, () => this.#loadGroups());
+    }
+    const actionLabel = group.join_status === 'pending' ? t('requestPending')
+      : group.join_status === 'invited' ? t('acceptInvite') : t('openChat');
+    return h('div', { class: `group-list-row${group.join_status === 'pending' ? ' pending' : ''}` },
+      statusAction
+        ? h('button', { class: 'group-list-open', type: 'button', onclick: statusAction }, face,
+          h('span', { class: 'chat-text' }, h('b', {}, group.name), h('small', { class: 'muted' }, `${group.caption || t(`joinModeLabel_${group.join_mode}`)}`)))
+        : h('span', { class: 'group-list-open' }, face,
+          h('span', { class: 'chat-text' }, h('b', {}, group.name), h('small', { class: 'muted' }, t('requestPending')))),
+      statusAction ? h('button', { class: 'pill-btn group-row-action', type: 'button', onclick: statusAction }, actionLabel)
+        : h('span', { class: 'muted group-row-action' }, actionLabel));
+  }
+
+  #toggleDiscover() {
+    if (!this.discoverBox.hidden) { this.discoverBox.hidden = true; return; }
+    const input = h('input', { class: 'field', type: 'search', placeholder: t('searchOpenGroups'), 'aria-label': t('searchOpenGroups') });
+    const results = h('div', { class: 'chat-list' });
+    let timer = 0, token = 0;
+    const search = async () => {
+      const mine = ++token;
+      results.replaceChildren(h('p', { class: 'muted center' }, t('loading')));
+      try {
+        const groups = await discoverGroups(input.value.trim());
+        if (mine !== token) return;
+        results.replaceChildren(...(groups.length ? groups.map(group => h('div', { class: 'group-discover-row' },
+          h('div', { class: 'chat-text' }, h('b', {}, group.name), h('small', { class: 'muted' }, group.caption || t('joinModeLabel_open'))),
+          h('button', { class: 'pill-btn hot', type: 'button', onclick: () => joinAndOpenGroup(group,
+            joined => { this.discoverBox.hidden = true; this.#loadGroups(); this.groupChat.open(joined); },
+            () => { toast(t('requestSent')); this.#loadGroups(); }) }, group.join_mode === 'open' ? t('joinGroup') : t('requestJoin'))))
+          : [h('p', { class: 'muted center' }, t('noOpenGroups'))]));
+      } catch (error) {
+        if (mine === token) results.replaceChildren(h('p', { class: 'muted center' }, error?.message || t('retry')));
+      }
+    };
+    input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 250); });
+    this.discoverBox.replaceChildren(input, results);
+    this.discoverBox.hidden = false;
+    search();
   }
 
   /** Opens a conversation directly (e.g. "Message" on someone's profile). */

@@ -795,8 +795,38 @@ html[data-low-end] .create-orb, html[data-low-end] .gift-card, html[data-low-end
 /* ---- Messages ---------------------------------------------------------------------------------------------- */
 .inbox-sheet { max-height: 88dvh; }
 .inbox-tools { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.inbox-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .inbox-active { margin: 0; font-size: 13px; }
 .inbox-tools .pill-btn { padding: 8px 14px; font-size: 14px; }
+.inbox-group-section { border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.group-section-title { margin: 12px 0 6px; font-size: 14px; }
+.group-list-row, .group-discover-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.group-list-row.pending { opacity: .8; }
+.group-list-open { min-width: 0; flex: 1; display: flex; align-items: center; gap: 10px; text-align: start; }
+.group-list-avatar { flex: none; width: 42px; height: 42px; border-radius: 50%; object-fit: cover; background: var(--panel-2); }
+.group-list-placeholder { display: grid; place-items: center; font-size: 22px; }
+.group-row-action { flex: none; white-space: nowrap; }
+.group-discover-row .chat-text { margin-inline-end: auto; }
+.group-chat-face img { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; }
+.group-chat-face span { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 50%; background: var(--panel-2); }
+.group-manage-sheet { max-height: 88dvh; }
+.group-management { overflow-y: auto; display: grid; gap: 10px; }
+.group-field { display: grid; gap: 5px; font-size: 13px; }
+.group-field .field { width: 100%; }
+.group-check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.group-settings { display: grid; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.group-meta { margin: 0; font-size: 13px; }
+.group-member-list { display: grid; gap: 4px; }
+.group-member-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.group-member-row > img { border-radius: 50%; object-fit: cover; }
+.group-member-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.group-member-actions { display: flex; gap: 4px; }
+.group-member-actions .pill-btn, .group-member-row .pill-btn { padding: 5px 8px; font-size: 12px; }
+.group-search-results { display: grid; }
+.group-search-person { display: flex; align-items: center; gap: 8px; text-align: start; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.group-search-person img { border-radius: 50%; object-fit: cover; }
+.group-search-person span { flex: 1; }
+.group-message-sender { font-weight: 700; }
 .chat-row { text-align: start; }
 .chat-sheet { height: 92dvh; max-height: 92dvh; }
 .chat-sheet .sheet-body { flex: 1; gap: 0; overflow: hidden; }
@@ -818,6 +848,12 @@ html[data-low-end] .create-orb, html[data-low-end] .gift-card, html[data-low-end
 .msg-form { display: flex; align-items: flex-end; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
 .msg-input { flex: 1; height: auto; min-height: 44px; max-height: 120px; padding: 11px 14px; resize: none; line-height: 1.35; }
 .msg-send { flex: none; height: 44px; }
+@media (max-width: 520px) {
+  .inbox-tools { align-items: flex-start; flex-direction: column; }
+  .inbox-actions { width: 100%; justify-content: flex-start; }
+  .group-member-row { flex-wrap: wrap; }
+  .group-member-actions { width: 100%; margin-inline-start: 40px; }
+}
 
 /* ---- Calls --------------------------------------------------------------------------------------------------- */
 .call-layer { position: fixed; inset: 0; z-index: 85; display: grid; grid-template-rows: 1fr auto; justify-items: center; background: radial-gradient(120% 80% at 50% 10%, #1b1660 0%, var(--bg) 60%, var(--void) 100%); opacity: 0; transition: opacity .25s; padding: env(safe-area-inset-top) 0 calc(28px + env(safe-area-inset-bottom)); }

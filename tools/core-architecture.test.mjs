@@ -17,6 +17,29 @@ const A = '11111111-1111-4111-8111-111111111111'; // public author
 const B = '22222222-2222-4222-8222-222222222222'; // private author
 const P = n => `aaaaaaaa-aaaa-4aaa-8aaa-${String(n).padStart(12, '0')}`;
 
+test('group management schema and UI implement guarded joins, invitations and co-admin tools', () => {
+  const migration = readFileSync(new URL('../supabase/migrations/20261207_milkyway_dm_group_management.sql', import.meta.url), 'utf8');
+  const api = readFileSync(new URL('../api/milkyway-groups.js', import.meta.url), 'utf8');
+  const inbox = readFileSync(new URL('../milkyway/app/ui/inbox-view.js', import.meta.url), 'utf8');
+  const view = readFileSync(new URL('../milkyway/app/ui/group-view.js', import.meta.url), 'utf8');
+  const data = readFileSync(new URL('../milkyway/app/data/groups.js', import.meta.url), 'utf8');
+  assert.match(migration, /join_mode in \('open', 'request_approval', 'invite_only'\)/);
+  assert.match(migration, /role in \('admin', 'co_admin', 'member'\)/);
+  assert.match(migration, /members_can_invite/);
+  assert.match(migration, /mw_group_join_request_decide/);
+  assert.match(migration, /Only the group creator can change administrator roles/);
+  assert.match(migration, /Only group members can invite people/);
+  assert.match(api, /mw_group_create_advanced/);
+  assert.match(api, /'decide-request'/);
+  assert.match(api, /groupJoinMode/);
+  assert.match(inbox, /discoverGroups/);
+  assert.match(inbox, /joinAndOpenGroup/);
+  assert.match(view, /makeCoAdmin/);
+  assert.match(view, /decideGroupRequest/);
+  assert.match(view, /sendGroupMessage/);
+  assert.match(data, /mw_dm_group_messages/);
+});
+
 test('ordinary LiveKit token checks avoid RoomService management requests', async () => {
   const originalFetch = globalThis.fetch;
   const previousEnv = Object.fromEntries(['LIVEKIT_URL', 'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET'].map(key => [key, process.env[key]]));
@@ -76,6 +99,35 @@ async function call(query) {
   await feed({ method: 'GET', headers: {}, query }, res);
   return { status, payload };
 }
+
+test('group creation API validates join mode and delegates creation to the secure RPC', async () => {
+  const originalFetch = globalThis.fetch;
+  const groupId = P(95);
+  const calls = fakeSupabase([
+    ['/auth/v1/user', { id: A, email: 'member@example.test', email_confirmed_at: '2026-01-01T00:00:00Z' }],
+    ['/rpc/mw_group_create_advanced', groupId],
+    ['/rest/v1/mw_dm_groups?', [{ id: groupId, name: 'Community', join_mode: 'open', created_by: A }]],
+  ]);
+  try {
+    const response = await runApi('milkyway-groups', new Request('https://www.masiyatunda.com/api/milkyway-groups?action=create', {
+      method: 'POST',
+      headers: { authorization: 'Bearer test-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Community', joinMode: 'open', membersCanInvite: true }),
+    }));
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.group.id, groupId);
+    assert.equal(result.group.join_mode, 'open');
+    assert.ok(calls.some(url => url.includes('/rpc/mw_group_create_advanced')));
+
+    const invalid = await runApi('milkyway-groups', new Request('https://www.masiyatunda.com/api/milkyway-groups?action=create', {
+      method: 'POST',
+      headers: { authorization: 'Bearer test-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Community', joinMode: 'automatic' }),
+    }));
+    assert.equal(invalid.status, 400);
+  } finally { globalThis.fetch = originalFetch; }
+});
 
 test('feed page returns ready-to-render posts with counts and hides private and audience-restricted posts', async () => {
   const rows = [
