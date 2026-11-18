@@ -5,12 +5,14 @@ import { auth } from '../core/net.js';
 import { inbox } from '../data/chats.js';
 import { profiles } from '../data/profiles.js';
 import { presence } from '../data/presence.js';
-import { loadThread, sendMessage, markRead, onMessage, deleteForMe, searchPeople } from '../data/messages.js';
+import { loadThread, sendMessage, sendOneViewText, sendDirectMedia, markRead, onMessage, deleteForMe, searchPeople } from '../data/messages.js';
+import { consumeViewOnce } from '../data/chat-media.js';
 import { discoverGroups, joinGroup, loadGroups } from '../data/groups.js';
 import { Sheet } from './sheet.js';
 import { h, icon, ago, avatar, formatDateTime, toast } from './dom.js';
 import { calls } from './call-view.js';
 import { GroupChatSheet, GroupCreateSheet, joinAndOpenGroup } from './group-view.js';
+import { ChatComposer, mediaMessageContent } from './chat-composer.js';
 
 const phoneIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1L6.6 10.8z"/></svg>';
 const backIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.4 4.6 14 3.2 5.2 12l8.8 8.8 1.4-1.4L8 12z"/></svg>';
@@ -166,17 +168,17 @@ export class InboxView {
 
 class ChatSheet {
   constructor() {
-    this.sheet = new Sheet({ title: '', className: 'chat-sheet', onClose: () => { this.peer = null; } });
+    this.sheet = new Sheet({ title: '', className: 'chat-sheet', onClose: () => { this.peer = null; this.#clearRevealed(); } });
     this.sheet.heading.hidden = true;
     this.name = h('b', {});
     this.state = h('small', { class: 'muted' });
     this.face = h('span', {});
     this.list = h('div', { class: 'msg-list', role: 'log', 'aria-live': 'polite' });
-    this.input = h('textarea', { class: 'field msg-input', rows: '1', maxlength: '4000', placeholder: t('typeMessage'), 'aria-label': t('typeMessage') });
-    this.sendBtn = h('button', { class: 'pill-btn hot msg-send', type: 'submit', 'aria-label': t('send') }, t('send'));
-    const form = h('form', { class: 'msg-form', onsubmit: event => { event.preventDefault(); this.#send(); } }, this.input, this.sendBtn);
-    this.input.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); this.#send(); } });
-    this.input.addEventListener('input', () => { this.input.style.height = 'auto'; this.input.style.height = `${Math.min(120, this.input.scrollHeight)}px`; });
+    this.revealed = new Map();
+    this.composer = new ChatComposer({
+      onSendText: (text, viewOnce) => this.#send(text, viewOnce),
+      onSendMedia: media => this.#sendMedia(media),
+    });
     const iconBtn = (label, html, onclick) => h('button', { class: 'icon-btn chat-call', type: 'button', 'aria-label': label, title: label, html, onclick });
     this.sheet.body.append(
       h('header', { class: 'chat-head' },
@@ -185,13 +187,14 @@ class ChatSheet {
         h('div', { class: 'chat-who' }, this.name, this.state),
         iconBtn(t('audioCall'), phoneIcon, () => this.peer && calls.start(this.peer.id, 'audio')),
         iconBtn(t('videoCall'), icon.camera, () => this.peer && calls.start(this.peer.id, 'video'))),
-      this.list, form);
+      this.list, this.composer.form);
     this.messages = new Map();
     onMessage(event => this.#live(event));
     presence.subscribe(() => this.#paintState());
   }
 
   open(person) {
+    this.#clearRevealed();
     this.peer = { ...person, ...(profiles.peek(person.id) || {}), ...person };
     this.name.textContent = this.peer.name || 'MilkyWay';
     this.face.replaceChildren(presenceAvatar(this.peer, 38));
@@ -231,8 +234,13 @@ class ChatSheet {
   #bubble(row, last) {
     const mine = row.sender_id === auth.userId;
     const encrypted = Number(row.encryption_version) > 0;
+    const revealed = this.revealed.get(row.id);
+    const content = revealed
+      ? mediaMessageContent({ ...row, ...revealed, view_once: false })
+      : encrypted ? h('p', {}, `🔒 ${t('encrypted')}`)
+        : mediaMessageContent(row, { mine, onViewOnce: row.view_once && !mine ? () => this.#viewOnce(row) : undefined });
     const bubble = h('div', { class: `msg${mine ? ' mine' : ''}${row.pending ? ' pending' : ''}${row.failed ? ' failed' : ''}`, 'data-id': row.id },
-      h('p', {}, encrypted ? `🔒 ${t('encrypted')}` : row.body),
+      content,
       h('small', {}, formatDateTime(row.created_at, { hour: '2-digit', minute: '2-digit' }), row.edited_at ? ` · ${t('edited')}` : '',
         mine && last && row.read_at ? ` · ${t('seen')}` : '', row.failed ? ` · ${t('messageFailed')}` : ''));
     if (!row.pending && !row.failed) {
@@ -248,16 +256,35 @@ class ChatSheet {
     try { await deleteForMe(row.id); this.messages.delete(row.id); this.#render(); } catch (error) { toast(error?.message || t('retry')); }
   }
 
-  async #send() {
-    const text = this.input.value.trim();
+  async #viewOnce(row) {
+    try {
+      const viewed = await consumeViewOnce(row.id);
+      const revealed = viewed.blob
+        ? { media_url: URL.createObjectURL(viewed.blob), media_type: viewed.mediaType }
+        : { body: viewed.body, media_url: '', media_type: '' };
+      this.revealed.set(row.id, revealed);
+      this.messages.set(row.id, { ...row, ...revealed, view_once: false });
+      this.#render();
+    } catch (error) { toast(error?.message || t('viewOnceFailed')); }
+  }
+
+  #clearRevealed() {
+    for (const media of this.revealed.values()) if (media.media_url?.startsWith('blob:')) URL.revokeObjectURL(media.media_url);
+    this.revealed.clear();
+  }
+
+  async #send(text, viewOnce = false) {
     if (!text || !this.peer) return;
     const peer = this.peer.id;
-    const temp = { id: `tmp-${Date.now()}`, sender_id: auth.userId, receiver_id: peer, body: text, created_at: new Date().toISOString(), pending: true };
+    const temp = {
+      id: `tmp-${Date.now()}`, sender_id: auth.userId, receiver_id: peer,
+      body: viewOnce ? 'View-once message' : text, view_once: viewOnce,
+      created_at: new Date().toISOString(), pending: true,
+    };
     this.messages.set(temp.id, temp);
-    this.input.value = ''; this.input.style.height = '';
     this.#render();
     try {
-      const saved = await sendMessage(peer, text);
+      const saved = viewOnce ? await sendOneViewText(peer, text) : await sendMessage(peer, text);
       this.messages.delete(temp.id);
       if (saved?.id) this.messages.set(saved.id, saved);
     } catch (error) {
@@ -267,11 +294,25 @@ class ChatSheet {
     if (this.peer?.id === peer) this.#render();
   }
 
+  async #sendMedia(media) {
+    if (!this.peer) return;
+    const peer = this.peer.id;
+    const message = await sendDirectMedia(peer, media);
+    if (this.peer?.id === peer && message?.id) {
+      this.messages.set(message.id, message);
+      this.#render();
+    }
+  }
+
   #live({ type, message }) {
     if (!this.peer || !message) return;
     const peer = this.peer.id;
     const inThread = (message.sender_id === peer && message.receiver_id === auth.userId) || (message.sender_id === auth.userId && message.receiver_id === peer);
-    if (type === 'DELETE') { if (this.messages.delete(message.id)) this.#render(); return; }
+    if (type === 'DELETE') {
+      if (this.revealed.has(message.id)) return;
+      if (this.messages.delete(message.id)) this.#render();
+      return;
+    }
     if (!inThread) return;
     if (type === 'INSERT' && message.sender_id === auth.userId) {
       // Our own message echoed back: replace the optimistic copy instead of showing it twice.

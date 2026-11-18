@@ -5,6 +5,7 @@ import { config } from '../config.js';
 import { api, rest, auth, supabase } from '../core/net.js';
 import { bus } from '../core/events.js';
 import { inbox } from './chats.js';
+import { removeChatMedia, sendViewOnce, uploadChatMedia } from './chat-media.js';
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const listeners = new Set();
@@ -27,6 +28,46 @@ export async function sendMessage(peer, body) {
   const message = Array.isArray(rows) ? rows[0] : rows;
   inbox.refresh();
   return message;
+}
+
+export async function sendOneViewText(peer, body) {
+  const text = String(body || '').trim().slice(0, 12000);
+  if (!text) throw new Error('Empty message');
+  const id = crypto.randomUUID();
+  const message = await sendViewOnce({ id, receiver: peer, messageType: 'text', body: text });
+  inbox.refresh();
+  return message;
+}
+
+export async function sendDirectMedia(peer, { file, noteType = '', viewOnce = false, peaks = [] } = {}) {
+  const id = crypto.randomUUID();
+  const uploaded = await uploadChatMedia(file, { id, viewOnce });
+  const messageType = noteType || uploaded.messageType;
+  const labels = { image: 'Photo', video: 'Video', audio: 'Audio', voice_note: 'Voice note', video_note: 'Video note' };
+  const metadata = noteType === 'voice_note' ? { waveform: peaks.slice(0, 120) } : {};
+  try {
+    let message;
+    if (viewOnce) {
+      message = await sendViewOnce({
+        id, receiver: peer, messageType, body: '',
+        bucket: uploaded.bucket, path: uploaded.path, mediaType: uploaded.mediaType, metadata,
+      });
+    } else {
+      const rows = await rest('mw_messages?select=*', {
+        method: 'POST', prefer: 'return=representation',
+        body: {
+          id, sender_id: auth.userId, receiver_id: peer, body: labels[messageType] || labels[uploaded.messageType],
+          message_type: messageType, media_url: uploaded.url, media_type: uploaded.mediaType, media_metadata: metadata,
+        },
+      });
+      message = Array.isArray(rows) ? rows[0] : rows;
+    }
+    inbox.refresh();
+    return message;
+  } catch (error) {
+    await removeChatMedia(uploaded).catch(cleanupError => console.warn('[dm-media] failed to remove unlinked upload', cleanupError));
+    throw error;
+  }
 }
 
 /** Marks everything this peer sent me as read (the only column people may update on mw_messages). */

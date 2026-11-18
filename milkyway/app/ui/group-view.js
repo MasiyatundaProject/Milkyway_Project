@@ -5,11 +5,13 @@ import { searchPeople } from '../data/messages.js';
 import {
   addGroupMembers, createGroup, decideGroupRequest, joinGroup, leaveGroup,
   loadGroup, loadGroupMessages, onGroupMessage, removeGroupMember,
-  sendGroupMessage, setGroupRole, updateGroup,
+  sendGroupMedia, sendGroupMessage, sendGroupOneViewText, setGroupRole, updateGroup,
 } from '../data/groups.js';
+import { consumeViewOnce } from '../data/chat-media.js';
 import { t } from '../core/i18n.js';
 import { Sheet } from './sheet.js';
 import { avatar, formatDateTime, h, toast } from './dom.js';
+import { ChatComposer, mediaMessageContent } from './chat-composer.js';
 
 const backIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.4 4.6 14 3.2 5.2 12l8.8 8.8 1.4-1.4L8 12z"/></svg>';
 const gearIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13a7.7 7.7 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L14.9 3h-4l-.4 2.9a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.4 11a7.7 7.7 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.8 1.7 1l.4 2.9h4l.4-2.9c.6-.2 1.2-.6 1.7-1l2.5 1 2-3.5zM12.9 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/></svg>';
@@ -71,31 +73,30 @@ export class GroupChatSheet {
     this.onChanged = onChanged;
     this.group = null;
     this.messages = new Map();
-    this.sheet = new Sheet({ title: '', className: 'chat-sheet group-chat-sheet', onClose: () => { this.group = null; } });
+    this.revealed = new Map();
+    this.sheet = new Sheet({ title: '', className: 'chat-sheet group-chat-sheet', onClose: () => { this.group = null; this.#clearRevealed(); } });
     this.sheet.heading.hidden = true;
     this.name = h('b', {});
     this.subtitle = h('small', { class: 'muted' });
     this.face = h('span', { class: 'group-chat-face' });
     this.list = h('div', { class: 'msg-list', role: 'log', 'aria-live': 'polite' });
-    this.input = h('textarea', { class: 'field msg-input', rows: '1', maxlength: '4000', placeholder: t('typeMessage'), 'aria-label': t('typeMessage') });
-    this.send = button(t('send'), () => this.#send(), 'pill-btn hot msg-send');
-    this.input.addEventListener('keydown', event => {
-      if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); this.#send(); }
+    this.composer = new ChatComposer({
+      onSendText: (text, viewOnce) => this.#send(text, viewOnce),
+      onSendMedia: media => this.#sendMedia(media),
     });
-    this.input.addEventListener('input', () => { this.input.style.height = 'auto'; this.input.style.height = `${Math.min(120, this.input.scrollHeight)}px`; });
     this.sheet.body.append(
       h('header', { class: 'chat-head' },
         h('button', { class: 'icon-btn chat-call', type: 'button', 'aria-label': t('back'), html: backIcon, onclick: () => this.sheet.close() }),
         this.face, h('div', { class: 'chat-who' }, this.name, this.subtitle),
         h('button', { class: 'icon-btn chat-call', type: 'button', 'aria-label': t('groupManage'), html: gearIcon, onclick: () => this.manager.open(this.group) })),
-      this.list,
-      h('form', { class: 'msg-form', onsubmit: event => { event.preventDefault(); this.#send(); } }, this.input, this.send));
+      this.list, this.composer.form);
     this.manager = new GroupManager({ onChanged: this.onChanged, onLeave: () => this.sheet.close() });
     onGroupMessage(event => this.#live(event));
   }
 
   async open(group) {
     if (!group?.id) return;
+    this.#clearRevealed();
     this.group = group;
     this.messages.clear();
     this.name.textContent = group.name || t('groupChat');
@@ -126,26 +127,50 @@ export class GroupChatSheet {
     this.list.replaceChildren(...rows.map(row => {
       const mine = row.sender_id === auth.userId;
       const profile = profiles.peek(row.sender_id);
+      const revealed = this.revealed.get(row.id);
+      const content = revealed
+        ? mediaMessageContent({ ...row, ...revealed, view_once: false })
+        : mediaMessageContent(row, { mine, onViewOnce: row.view_once && !mine ? () => this.#viewOnce(row) : undefined });
       return h('div', { class: `msg${mine ? ' mine' : ''}`, 'data-id': row.id },
         !mine ? h('small', { class: 'group-message-sender' }, profile?.name || 'MilkyWay') : null,
-        h('p', {}, row.body),
+        content,
         h('small', {}, formatDateTime(row.created_at, { hour: '2-digit', minute: '2-digit' }), row.edited_at ? ` · ${t('edited')}` : ''));
     }));
     requestAnimationFrame(() => { this.list.scrollTop = this.list.scrollHeight; });
   }
 
-  async #send() {
-    const text = this.input.value.trim();
+  async #viewOnce(row) {
+    try {
+      const viewed = await consumeViewOnce(row.id, this.group?.id);
+      const revealed = viewed.blob
+        ? { media_url: URL.createObjectURL(viewed.blob), media_type: viewed.mediaType }
+        : { body: viewed.body, media_url: '', media_type: '' };
+      this.revealed.set(row.id, revealed);
+      this.messages.set(row.id, { ...row, ...revealed, view_once: false });
+      this.#render();
+    } catch (error) { toast(error?.message || t('viewOnceFailed')); }
+  }
+
+  #clearRevealed() {
+    for (const media of this.revealed.values()) if (media.media_url?.startsWith('blob:')) URL.revokeObjectURL(media.media_url);
+    this.revealed.clear();
+  }
+
+  async #send(text, viewOnce = false) {
     const groupId = this.group?.id;
     if (!text || !groupId) return;
-    const temp = { id: `tmp-${Date.now()}`, group_id: groupId, sender_id: auth.userId, body: text, created_at: new Date().toISOString(), pending: true };
+    const temp = {
+      id: `tmp-${Date.now()}`, group_id: groupId, sender_id: auth.userId,
+      body: viewOnce ? 'View-once message' : text, view_once: viewOnce,
+      created_at: new Date().toISOString(), pending: true,
+    };
     this.messages.set(temp.id, temp);
-    this.input.value = ''; this.input.style.height = '';
     this.#render();
     try {
-      const result = await sendGroupMessage(groupId, text);
+      const result = viewOnce ? await sendGroupOneViewText(groupId, text) : await sendGroupMessage(groupId, text);
       this.messages.delete(temp.id);
-      if (result?.message?.id) this.messages.set(result.message.id, result.message);
+      const message = result?.message || result;
+      if (message?.id) this.messages.set(message.id, message);
     } catch (error) {
       this.messages.delete(temp.id);
       toast(error?.message || t('messageFailed'));
@@ -153,9 +178,23 @@ export class GroupChatSheet {
     if (this.group?.id === groupId) this.#render();
   }
 
+  async #sendMedia(media) {
+    const groupId = this.group?.id;
+    if (!groupId) return;
+    const result = await sendGroupMedia(groupId, media);
+    const message = result?.message || result;
+    if (this.group?.id === groupId && message?.id) {
+      this.messages.set(message.id, message);
+      this.#render();
+    }
+  }
+
   #live({ type, message }) {
     if (!this.group || message?.group_id !== this.group.id) return;
-    if (type === 'DELETE') this.messages.delete(message.id);
+    if (type === 'DELETE') {
+      if (this.revealed.has(message.id)) return;
+      this.messages.delete(message.id);
+    }
     else {
       if (type === 'INSERT' && message.sender_id === auth.userId) {
         for (const [id, row] of this.messages) if (row.pending && row.body === message.body) this.messages.delete(id);

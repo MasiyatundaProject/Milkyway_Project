@@ -44,6 +44,30 @@ test('group management schema and UI implement guarded joins, invitations and co
   assert.match(data, /mw_dm_group_messages/);
 });
 
+test('DM media notes include private one-view storage and recording controls', () => {
+  const migration = readFileSync(new URL('../supabase/migrations/20261208_milkyway_dm_media_notes.sql', import.meta.url), 'utf8');
+  const composer = readFileSync(new URL('../milkyway/app/ui/chat-composer.js', import.meta.url), 'utf8');
+  const media = readFileSync(new URL('../milkyway/app/data/chat-media.js', import.meta.url), 'utf8');
+  const direct = readFileSync(new URL('../milkyway/app/ui/inbox-view.js', import.meta.url), 'utf8');
+  const group = readFileSync(new URL('../milkyway/app/ui/group-view.js', import.meta.url), 'utf8');
+  const api = readFileSync(new URL('../api/milkyway-message.js', import.meta.url), 'utf8');
+  assert.match(migration, /values \(\s*'mw-dm-ephemeral', 'mw-dm-ephemeral', false/i);
+  assert.match(migration, /mw_message_consume_once/);
+  assert.match(migration, /mw_message_complete_once/);
+  assert.match(migration, /mw_dm_ephemeral_media_allowed/);
+  assert.match(composer, /MediaRecorder/);
+  assert.match(composer, /getUserMedia/);
+  assert.match(composer, /dm-waveform/);
+  assert.match(composer, /video-note-playback/);
+  assert.match(composer, /viewOnce/);
+  assert.match(media, /mw-dm-ephemeral/);
+  assert.match(media, /consume-once/);
+  assert.match(direct, /sendDirectMedia/);
+  assert.match(group, /sendGroupMedia/);
+  assert.match(api, /mw_message_send_once/);
+  assert.match(api, /mw_message_complete_once/);
+});
+
 test('ordinary LiveKit token checks avoid RoomService management requests', async () => {
   const originalFetch = globalThis.fetch;
   const previousEnv = Object.fromEntries(['LIVEKIT_URL', 'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET'].map(key => [key, process.env[key]]));
@@ -130,6 +154,45 @@ test('group creation API validates join mode and delegates creation to the secur
       body: JSON.stringify({ name: 'Community', joinMode: 'automatic' }),
     }));
     assert.equal(invalid.status, 400);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('one-view DM API requires a private consume RPC and deletes media before returning bytes', async () => {
+  const originalFetch = globalThis.fetch;
+  const id = P(96);
+  const path = `${A}/${id}.webm`;
+  const calls = [];
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    calls.push({ url, method: init.method || 'GET', body: init.body });
+    if (url.includes('/auth/v1/user')) return new Response(JSON.stringify({ id: B }), { status: 200 });
+    if (url.includes('/rpc/mw_message_consume_once')) {
+      return new Response(JSON.stringify({
+        message: { id, message_type: 'voice_note' },
+        payload: { bucket: 'mw-dm-ephemeral', object_path: path, content_type: 'audio/webm', body: '', metadata: {} },
+      }), { status: 200 });
+    }
+    if (url.includes('/storage/v1/object/mw-dm-ephemeral/') && (init.method || 'GET') === 'GET') {
+      return new Response(new Uint8Array([82, 73, 70, 70]), { status: 200, headers: { 'Content-Type': 'audio/webm' } });
+    }
+    if (url.includes('/storage/v1/object/mw-dm-ephemeral') && init.method === 'DELETE') {
+      return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (url.includes('/rpc/mw_message_complete_once')) return new Response('null', { status: 200, headers: { 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ message: 'Unexpected request' }), { status: 500 });
+  };
+  try {
+    const response = await runApi('milkyway-message', new Request('https://www.masiyatunda.com/api/milkyway-message?action=consume-once', {
+      method: 'POST',
+      headers: { authorization: 'Bearer test-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ id }),
+    }));
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('cache-control'), 'no-store, private, max-age=0');
+    assert.equal(response.headers.get('content-type'), 'audio/webm');
+    assert.deepEqual([...new Uint8Array(await response.arrayBuffer())], [82, 73, 70, 70]);
+    assert.ok(calls.some(call => call.url.includes('/storage/v1/object/mw-dm-ephemeral') && call.method === 'DELETE'));
+    assert.ok(calls.some(call => call.url.includes('/rpc/mw_message_complete_once')));
   } finally { globalThis.fetch = originalFetch; }
 });
 

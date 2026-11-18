@@ -144,17 +144,31 @@ export default route({
     const group = requireUuid(String(body.group || ''), 'group');
     const message = String(body.body ?? '').trim();
     if (!message || message.length > 4000) throw new ApiError(400, 'Message must be 1-4000 characters.');
-    const row = { group_id: group, sender_id: ctx.user.id, body: message };
+    const messageType = String(body.messageType || 'text');
+    if (!['text', 'image', 'video', 'audio', 'voice_note', 'video_note'].includes(messageType)) {
+      throw new ApiError(400, 'Unsupported message type.');
+    }
+    if (body.viewOnce === true) throw new ApiError(400, 'Use the one-view message action for self-destructing media.');
+    const mediaUrl = text(body.mediaUrl, 2000);
+    const mediaType = text(body.mediaType, 100);
+    if (messageType !== 'text' && (!mediaUrl.startsWith('https://') || !/^(image|video|audio)\/[a-z0-9.+-]+$/i.test(mediaType))) {
+      throw new ApiError(400, 'Media attachment is invalid.');
+    }
+    const metadata = body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata) ? body.metadata : {};
+    const row = {
+      group_id: group, sender_id: ctx.user.id, body: message,
+      message_type: messageType, media_url: mediaUrl, media_type: mediaType, media_metadata: metadata,
+    };
     if (isUuid(body.id)) row.id = body.id;
     // A retried send with the same client id is ignored rather than duplicated.
-    const rows = await ctx.rest('mw_dm_group_messages?on_conflict=id', { method: 'POST', body: row, returning: true, prefer: 'resolution=ignore-duplicates' });
+    const rows = await ctx.rest('mw_dm_group_messages?on_conflict=id', { method: 'POST', body: row, returning: true });
     return { message: rows?.[0] || { ...row, created_at: new Date().toISOString() } };
   },
 
   messages: async ({ ctx, query, body }) => {
     const group = groupId(body, query);
     const limit = Math.min(Math.max(parseInt(query.limit, 10) || 100, 1), 200);
-    const rows = await ctx.rest(`mw_dm_group_messages?select=id,sender_id,body,created_at,edited_at&group_id=${eq(group)}&order=created_at.desc&limit=${limit}`);
+    const rows = await ctx.rest(`mw_dm_group_messages?select=id,sender_id,body,created_at,edited_at,message_type,media_url,media_type,media_metadata,view_once,viewed_at&group_id=${eq(group)}&order=created_at.desc&limit=${limit}`);
     return { messages: rows || [] };
   },
 

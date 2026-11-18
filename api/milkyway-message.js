@@ -2,8 +2,11 @@ import { SUPABASE, supabaseKey } from './_lib/supa.js';
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const MAX_HIDE = 200;
+const MESSAGE_TYPES = new Set(['text', 'image', 'video', 'audio', 'voice_note', 'video_note']);
 
 class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
+
+const storagePath = value => String(value || '').split('/').map(encodeURIComponent).join('/');
 
 export default async function handler(req, res) {
   const auth = req.headers.authorization || '';
@@ -44,6 +47,92 @@ export default async function handler(req, res) {
       const hidden = new Set((found || []).map(row => row.message_id));
       return rows.filter(row => !hidden.has(row.id));
     };
+
+    if (req.method === 'POST' && action === 'send-once') {
+      const id = String(body.id || '');
+      const group = String(body.group || '');
+      const receiver = String(body.receiver || '');
+      const messageType = String(body.messageType || 'text');
+      const mediaPath = String(body.path || '');
+      const mediaBucket = String(body.bucket || '');
+      const mediaType = String(body.mediaType || '');
+      if (!UUID.test(id) || (group && !UUID.test(group)) || (!group && !UUID.test(receiver))) {
+        throw new HttpError(400, 'Invalid conversation or message.');
+      }
+      if (!MESSAGE_TYPES.has(messageType)) throw new HttpError(400, 'Unsupported message type.');
+      if (messageType !== 'text' && (!mediaPath || mediaBucket !== 'mw-dm-ephemeral')) {
+        throw new HttpError(400, 'Private media upload is missing.');
+      }
+      if (messageType === 'text' && String(body.body || '').trim().length > 12000) {
+        throw new HttpError(400, 'Message is too long.');
+      }
+      const message = await rest('rpc/mw_message_send_once', {
+        method: 'POST',
+        body: JSON.stringify({
+          p_receiver: group ? null : receiver,
+          p_group: group || null,
+          p_id: id,
+          p_body: typeof body.body === 'string' ? body.body : '',
+          p_type: messageType,
+          p_bucket: mediaBucket,
+          p_path: mediaPath,
+          p_content_type: mediaType,
+          p_metadata: body.metadata && typeof body.metadata === 'object' ? body.metadata : {},
+        }),
+      });
+      return res.status(200).json({ message });
+    }
+
+    if (req.method === 'POST' && action === 'consume-once') {
+      const id = String(body.id || '');
+      const group = String(body.group || '');
+      if (!UUID.test(id) || (group && !UUID.test(group))) throw new HttpError(400, 'Invalid message.');
+      const rpc = (name, args) => rest(`rpc/${name}`, { method: 'POST', body: JSON.stringify(args) });
+      const args = { p_id: id, p_group: group || null };
+      let consumed;
+      try { consumed = await rpc('mw_message_consume_once', args); }
+      catch (error) { throw error; }
+      const payload = consumed?.payload || {};
+      if (!payload.bucket) {
+        await rpc('mw_message_complete_once', args);
+        res.setHeader('Cache-Control', 'no-store, private, max-age=0');
+        return res.status(200).json({ body: String(payload.body || '') });
+      }
+      if (payload.bucket !== 'mw-dm-ephemeral' || !payload.object_path) {
+        await rpc('mw_message_release_once', args);
+        throw new HttpError(503, 'Private media reference is invalid.');
+      }
+      const objectUrl = `${SUPABASE}/storage/v1/object/${encodeURIComponent(payload.bucket)}/${storagePath(payload.object_path)}`;
+      let mediaResponse;
+      try {
+        mediaResponse = await fetch(objectUrl, { headers: { Authorization: auth, apikey: key }, signal: AbortSignal.timeout(45000) });
+      } catch {
+        await rpc('mw_message_release_once', args);
+        throw new HttpError(503, 'Could not load the one-view media. You can try again.');
+      }
+      if (!mediaResponse.ok) {
+        await rpc('mw_message_release_once', args);
+        throw new HttpError(mediaResponse.status === 404 ? 404 : 503, mediaResponse.status === 404 ? 'One-view media is no longer available.' : 'Could not load the one-view media. You can try again.');
+      }
+      const mediaBytes = new Uint8Array(await mediaResponse.arrayBuffer());
+      const removeResponse = await fetch(`${SUPABASE}/storage/v1/object/${encodeURIComponent(payload.bucket)}`, {
+        method: 'DELETE',
+        headers: { Authorization: auth, apikey: key, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prefixes: [payload.object_path] }),
+        signal: AbortSignal.timeout(20000),
+      });
+      if (!removeResponse.ok) {
+        await rpc('mw_message_release_once', args);
+        throw new HttpError(503, 'Could not securely delete the viewed media. Please try again.');
+      }
+      await rpc('mw_message_complete_once', args);
+      res.setHeader('Cache-Control', 'no-store, private, max-age=0');
+      res.setHeader('Content-Type', String(payload.content_type || 'application/octet-stream'));
+      res.setHeader('Content-Length', String(mediaBytes.byteLength));
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Content-Disposition', 'inline');
+      return res.status(200).send(mediaBytes);
+    }
 
     if (req.method === 'GET') {
       if (isGroup) {

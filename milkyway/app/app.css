@@ -848,11 +848,46 @@ html[data-low-end] .create-orb, html[data-low-end] .gift-card, html[data-low-end
 .msg-form { display: flex; align-items: flex-end; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
 .msg-input { flex: 1; height: auto; min-height: 44px; max-height: 120px; padding: 11px 14px; resize: none; line-height: 1.35; }
 .msg-send { flex: none; height: 44px; }
+.dm-composer { display: grid; gap: 8px; align-items: stretch; }
+.dm-composer-row { display: flex; align-items: flex-end; gap: 6px; min-width: 0; }
+.dm-composer-row .msg-input { min-width: 30px; }
+.chat-tool { flex: none; width: 38px; height: 40px; display: grid; place-items: center; padding: 0; border-radius: 12px; color: var(--accent-2); background: var(--panel-2); font-size: 19px; }
+.chat-tool:disabled { opacity: .45; cursor: not-allowed; }
+.chat-tool.active { color: #fff; background: var(--electric); box-shadow: var(--glow); }
+.chat-view-once { width: 34px; font-size: 13px; font-weight: 800; }
+.chat-media-picker { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.chat-media-preview { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 52px; padding: 8px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel-2); }
+.chat-media-preview[hidden] { display: none; }
+.chat-media-preview-content { display: flex; min-width: 0; align-items: center; gap: 10px; }
+.chat-media-preview-content > img, .chat-media-preview-content > video { width: 54px; height: 54px; object-fit: cover; border-radius: 10px; }
+.chat-media-preview-content > audio { width: min(58vw, 260px); height: 38px; }
+.chat-media-name { overflow: hidden; max-width: 38vw; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.chat-recorder { display: flex; flex: 1; align-items: center; gap: 8px; min-width: 0; }
+.chat-recorder .dm-waveform { flex: 1; }
+.chat-record-time { font-variant-numeric: tabular-nums; color: #ff6b85; font-size: 12px; }
+.chat-recorder.video { justify-content: center; min-height: 110px; }
+.chat-recorder.video .chat-record-time { margin-inline-start: auto; }
+.video-note-preview, .video-note-playback { width: 108px; height: 108px; aspect-ratio: 1; border-radius: 50%; object-fit: cover; background: #080916; }
+.video-note-preview.is-recording { border: 2px solid #ff3b6b; }
+.video-note-playback { display: block; width: min(230px, 62vw); height: min(230px, 62vw); }
+.dm-waveform { display: inline-flex; height: 30px; min-width: 70px; align-items: center; gap: 2px; overflow: hidden; }
+.dm-waveform i { display: block; flex: 1; min-width: 2px; height: calc(var(--peak, .3) * 100%); border-radius: 2px; background: var(--accent-2); }
+.dm-waveform.is-recording i { background: #ff6580; }
+.dm-voice-message { display: grid; gap: 4px; min-width: min(230px, 55vw); }
+.dm-voice-message audio { width: 100%; height: 34px; }
+.dm-image-message, .dm-video-message { display: block; max-width: min(280px, 68vw); max-height: 340px; border-radius: 12px; object-fit: contain; background: #080916; }
+.view-once-card { display: grid; min-width: 145px; justify-items: center; gap: 8px; padding: 8px; text-align: center; }
+.view-once-icon { display: grid; width: 46px; height: 46px; place-items: center; border: 2px solid currentColor; border-radius: 50%; font-weight: 900; }
+.view-once-card .pill-btn { padding: 6px 12px; }
 @media (max-width: 520px) {
   .inbox-tools { align-items: flex-start; flex-direction: column; }
   .inbox-actions { width: 100%; justify-content: flex-start; }
   .group-member-row { flex-wrap: wrap; }
   .group-member-actions { width: 100%; margin-inline-start: 40px; }
+  .dm-composer-row { gap: 4px; }
+  .dm-composer-row .chat-tool { width: 32px; height: 38px; }
+  .dm-composer-row .chat-view-once { width: 30px; }
+  .dm-composer-row .msg-send { padding: 0 9px; font-size: 13px; }
 }
 
 /* ---- Calls --------------------------------------------------------------------------------------------------- */

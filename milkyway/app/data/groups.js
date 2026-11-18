@@ -2,6 +2,7 @@
 import { config } from '../config.js';
 import { api, auth, supabase } from '../core/net.js';
 import { bus } from '../core/events.js';
+import { removeChatMedia, sendViewOnce, uploadChatMedia } from './chat-media.js';
 
 const endpoint = config.api.groups;
 const listeners = new Set();
@@ -61,8 +62,40 @@ export async function loadGroupMessages(group) {
   return (data?.messages || []).slice().reverse();
 }
 
-export async function sendGroupMessage(group, body) {
-  return request('send', { method: 'POST', body: { group, body } });
+export async function sendGroupMessage(group, body, options = {}) {
+  return request('send', { method: 'POST', body: { group, body, ...options } });
+}
+
+export async function sendGroupOneViewText(group, body) {
+  const text = String(body || '').trim().slice(0, 4000);
+  if (!text) throw new Error('Empty message');
+  return sendViewOnce({ id: crypto.randomUUID(), group, messageType: 'text', body: text });
+}
+
+export async function sendGroupMedia(group, { file, noteType = '', viewOnce = false, peaks = [] } = {}) {
+  const id = crypto.randomUUID();
+  const uploaded = await uploadChatMedia(file, { id, viewOnce });
+  const messageType = noteType || uploaded.messageType;
+  const labels = { image: 'Photo', video: 'Video', audio: 'Audio', voice_note: 'Voice note', video_note: 'Video note' };
+  const metadata = noteType === 'voice_note' ? { waveform: peaks.slice(0, 120) } : {};
+  try {
+    if (viewOnce) {
+      return await sendViewOnce({
+        id, group, messageType, body: '',
+        bucket: uploaded.bucket, path: uploaded.path, mediaType: uploaded.mediaType, metadata,
+      });
+    }
+    return await request('send', {
+      method: 'POST',
+      body: {
+        group, id, body: labels[messageType] || labels[uploaded.messageType],
+        messageType, mediaUrl: uploaded.url, mediaType: uploaded.mediaType, metadata,
+      },
+    });
+  } catch (error) {
+    await removeChatMedia(uploaded).catch(cleanupError => console.warn('[dm-media] failed to remove unlinked upload', cleanupError));
+    throw error;
+  }
 }
 
 export function onGroupMessage(listener) {
