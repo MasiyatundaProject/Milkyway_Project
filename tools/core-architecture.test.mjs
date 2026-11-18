@@ -702,6 +702,7 @@ test('LIVE room table privileges are granted to authenticated users and limited 
   const migration = readFileSync(new URL('../supabase/migrations/20261125_milkyway_live_room_rls.sql', import.meta.url), 'utf8');
   const requestMigration = readFileSync(new URL('../supabase/migrations/20261130_milkyway_live_member_request_rls.sql', import.meta.url), 'utf8');
   const requestRpc = readFileSync(new URL('../supabase/migrations/20261130_milkyway_live_guest_request_rpc.sql', import.meta.url), 'utf8');
+  const requestRpcUuidFix = readFileSync(new URL('../supabase/migrations/20261201_milkyway_live_guest_request_uuid_fix.sql', import.meta.url), 'utf8');
   const repair = readFileSync(new URL('../supabase/milkyway-schema-repair.sql', import.meta.url), 'utf8');
   const roomApi = readFileSync(new URL('../api/milkyway-live-room.js', import.meta.url), 'utf8');
   assert.match(migration, /grant select, insert, update, delete[\s\S]*mw_live_room_settings, public\.mw_live_room_members, public\.mw_live_room_messages[\s\S]*to authenticated/i);
@@ -713,6 +714,15 @@ test('LIVE room table privileges are granted to authenticated users and limited 
   assert.match(requestMigration, /create policy mw_live_members_self_update[\s\S]*for update to authenticated[\s\S]*state in \('viewer', 'pending'\)/i);
   assert.match(requestMigration, /create policy mw_live_members_host_update[\s\S]*for update to authenticated[\s\S]*mw_is_live_host\(room_name\)/i);
   assert.match(requestRpc, /create or replace function public\.mw_live_room_request\([\s\S]*security definer[\s\S]*auth\.uid\(\)[\s\S]*session\.is_live is true[\s\S]*state = 'pending'/i);
+  assert.match(requestRpc, /me text := auth\.uid\(\)::text/);
+  assert.match(requestRpc, /select session\.host_id::text[\s\S]*if live_host = me/);
+  assert.match(requestRpc, /member\.user_id::text = me/);
+  assert.match(requestRpc, /room_settings -> 'blockedIds'.*lower\(me\)/);
+  assert.match(requestRpc, /p_room_name, me::uuid,/);
+  assert.match(requestRpcUuidFix, /me text := auth\.uid\(\)::text/);
+  assert.match(requestRpcUuidFix, /member\.user_id::text = me/);
+  assert.match(requestRpcUuidFix, /session\.host_id::text/);
+  assert.match(requestRpcUuidFix, /notify pgrst, 'reload schema'/i);
   assert.match(requestRpc, /grant execute on function public\.mw_live_room_request\(text, text, text\) to authenticated/i);
   assert.match(roomApi, /ctx\.rpc\('mw_live_room_request', \{[\s\S]*p_room_name: room\.roomName/);
   assert.match(repair, /supabase\/migrations\/20261130_milkyway_live_member_request_rls\.sql/);
