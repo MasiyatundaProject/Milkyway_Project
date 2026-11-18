@@ -52,7 +52,7 @@ export async function identifyMediaFile(file) {
   if (text.startsWith('GIF87a') || text.startsWith('GIF89a')) return typed('image', 'image/gif', 'gif');
   if (text.slice(4, 8) === 'ftyp') {
     const brand = text.slice(8, 12).toLowerCase();
-    if (/^(hei[cfms]|mif[1i]|msf[1i])$/.test(brand)) return typed('image', 'image/heic', 'heic');
+    if (/^(hei[cf]|heix|hevc|hevx|heim|heis|mif[1i]|msf[1i])$/.test(brand)) return typed('image', 'image/heic', 'heic');
     if (brand === 'qt  ') return typed('video', 'video/quicktime', 'mov');
     return typed('video', 'video/mp4', 'mp4');
   }

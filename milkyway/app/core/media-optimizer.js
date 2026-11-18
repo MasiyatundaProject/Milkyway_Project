@@ -40,7 +40,10 @@ const workerTasks = new Map();
 function stopWorker(error) {
   worker?.terminate();
   worker = null;
-  for (const task of workerTasks.values()) task.reject(error);
+  for (const task of workerTasks.values()) {
+    clearTimeout(task.timer);
+    task.reject(error);
+  }
   workerTasks.clear();
 }
 
@@ -52,16 +55,19 @@ function optimizeInWorker(file) {
       const task = workerTasks.get(event.data?.id);
       if (!task) return;
       workerTasks.delete(event.data.id);
+      clearTimeout(task.timer);
       if (event.data.error) task.reject(new Error(event.data.error));
       else task.resolve(event.data.result);
     });
     worker.addEventListener('error', event => stopWorker(event.error || new Error('Media worker failed.')));
+    worker.addEventListener('messageerror', () => stopWorker(new Error('Media worker could not read the selected photo.')));
   }
   const id = ++nextWorkerTask;
   return new Promise((resolve, reject) => {
-    workerTasks.set(id, { resolve, reject });
+    const timer = setTimeout(() => stopWorker(new Error('Timed out while preparing the selected photo.')), 30_000);
+    workerTasks.set(id, { resolve, reject, timer });
     try { worker.postMessage({ id, file }); }
-    catch (error) { workerTasks.delete(id); reject(error); }
+    catch (error) { clearTimeout(timer); workerTasks.delete(id); reject(error); }
   });
 }
 

@@ -57,7 +57,7 @@ export class ComposeSheet {
     this.audioPending = false;
     this.publishing = false;
     this.preview = h('div', { class: 'compose-preview' });
-    this.mediaInput = h('input', { type: 'file', accept: 'image/*,video/*,.heic,.heif,.mov,.m4v,.3gp', multiple: true, hidden: true, onchange: () => { void this.#pickMedia([...this.mediaInput.files]); } });
+    this.mediaInput = h('input', { type: 'file', accept: 'image/*,video/*,.heic,.heif,.mov,.m4v,.3gp', multiple: true, hidden: true, onchange: () => { void this.#pickMedia([...(this.mediaInput.files || [])]); } });
     this.audioInput = h('input', { type: 'file', accept: 'audio/*,.m4a,.aac,.wav,.ogg,.opus,.mp3', hidden: true, onchange: () => { void this.#pickAudio(this.audioInput.files?.[0] || null); } });
     this.caption = h('textarea', { class: 'field area', maxlength: '2200', placeholder: t('captionPlaceholder') });
     this.style = h('select', { class: 'field', 'aria-label': t('slideshowStyle') },

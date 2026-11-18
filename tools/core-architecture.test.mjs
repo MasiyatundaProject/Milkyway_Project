@@ -382,6 +382,9 @@ test('media picker detects device file extensions and signatures when MIME types
   const png = new Blob([Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])]);
   Object.defineProperty(png, 'name', { value: 'camera-file' });
   assert.deepEqual(await identifyMediaFile(png), { kind: 'image', type: 'image/png', extension: 'png' });
+  const heic = new Blob([new TextEncoder().encode('0000ftypheix0000')]);
+  Object.defineProperty(heic, 'name', { value: 'camera-file' });
+  assert.deepEqual(await identifyMediaFile(heic), { kind: 'image', type: 'image/heic', extension: 'heic' });
   let clicked = false;
   openFilePicker({ showPicker() { throw new Error('Unsupported in this WebView.'); }, click() { clicked = true; } });
   assert.equal(clicked, true);
@@ -397,6 +400,8 @@ test('compose upload normalizes MIME type and reports storage transport errors w
   assert.match(optimizer, /decodeImage\(file\)/);
   assert.match(optimizer, /isHeic/);
   assert.match(optimizer, /video\.videoWidth > 4096 \|\| video\.videoHeight > 4096/);
+  assert.match(optimizer, /messageerror/);
+  assert.match(optimizer, /Timed out while preparing the selected photo/);
 });
 
 test('DM room cleanup RPC is installed and token issuance avoids cleanup management calls', () => {
