@@ -4867,6 +4867,16 @@ begin
   return gid;
 end $$;
 
+-- Keep the original RPC safe for older clients that still call it directly.
+create or replace function public.mw_group_create(p_name text, p_caption text, p_description text, p_members uuid[])
+returns uuid language plpgsql security definer set search_path = ''
+as $$
+begin
+  return public.mw_group_create_advanced(
+    p_name, p_caption, p_description, '', 'invite_only', true, p_members
+  );
+end $$;
+
 create or replace function public.mw_group_update_settings(
   p_group uuid, p_name text, p_caption text, p_description text,
   p_avatar_url text, p_join_mode text, p_members_can_invite boolean
@@ -4927,7 +4937,8 @@ begin
     return 'active';
   end if;
   if mode = 'invite_only' then raise exception 'This group is invite-only.' using errcode = '42501'; end if;
-  if (select count(*) from public.mw_dm_group_members where group_id = p_group and join_status = 'active') >= 256 then
+  if (select count(*) from public.mw_dm_group_members
+      where group_id = p_group and join_status in ('active', 'invited')) >= 256 then
     raise exception 'This group is full.' using errcode = '22023';
   end if;
   insert into public.mw_dm_group_members(group_id, user_id, role, join_status)
@@ -4951,7 +4962,7 @@ begin
     raise exception 'Member invitations are disabled.' using errcode = '42501';
   end if;
   select 256 - count(*) into room from public.mw_dm_group_members
-    where group_id = p_group and join_status = 'active';
+    where group_id = p_group and join_status in ('active', 'invited');
   if room <= 0 then raise exception 'This group is full.' using errcode = '22023'; end if;
   with ins as (
     insert into public.mw_dm_group_members(group_id, user_id, role, join_status, invited_by)
@@ -4990,7 +5001,7 @@ begin
   if target_role is null then raise exception 'Join request not found.' using errcode = 'P0002'; end if;
   if p_approve then
     select count(*) into active_count from public.mw_dm_group_members
-      where group_id = p_group and join_status = 'active';
+      where group_id = p_group and join_status in ('active', 'invited');
     if active_count >= 256 then raise exception 'This group is full.' using errcode = '22023'; end if;
     update public.mw_dm_group_members set join_status = 'active', joined_at = now()
       where group_id = p_group and user_id = p_user;

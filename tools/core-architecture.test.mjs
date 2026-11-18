@@ -29,6 +29,8 @@ test('group management schema and UI implement guarded joins, invitations and co
   assert.match(migration, /mw_group_join_request_decide/);
   assert.match(migration, /Only the group creator can change administrator roles/);
   assert.match(migration, /Only group members can invite people/);
+  assert.match(migration, /mw_group_create_advanced\(\s*p_name, p_caption, p_description, '', 'invite_only'/);
+  assert.match(migration, /join_status in \('active', 'invited'\)/);
   assert.match(api, /mw_group_create_advanced/);
   assert.match(api, /'decide-request'/);
   assert.match(api, /groupJoinMode/);
