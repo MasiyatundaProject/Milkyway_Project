@@ -430,6 +430,7 @@ test('LIVE guest stage grants publisher permissions and renders allocated guest 
   const liveView = readFileSync(new URL('../milkyway/app/ui/live-view.js', import.meta.url), 'utf8');
   const liveControls = readFileSync(new URL('../milkyway/app/ui/live-controls.js', import.meta.url), 'utf8');
   const liveSession = readFileSync(new URL('../milkyway/app/ui/live-session.js', import.meta.url), 'utf8');
+  const seatAllocation = readFileSync(new URL('../supabase/migrations/20261205_milkyway_live_guest_seat_allocation.sql', import.meta.url), 'utf8');
   assert.match(roomApi, /setPublish\(room\.roomName, userId, true, room\.audio\)/);
   assert.match(roomApi, /canPublish: sources\.length > 0, canPublishData: true, canPublishSources: sources/);
   assert.match(tokenApi, /const approvedGuest = !isHost && member\?\.state === 'speaker'/);
@@ -438,7 +439,11 @@ test('LIVE guest stage grants publisher permissions and renders allocated guest 
   const stageButton = liveView.match(/function paintStageButton\(slide, session\) \{([\s\S]*?)\n\}/)?.[1] || '';
   assert.match(stageButton, /r\.stageBtn\.disabled = stage === 'joining' \|\| !!session\.stageAction/);
   assert.doesNotMatch(stageButton, /allowRequests|admission|canAsk/);
-  assert.match(liveView, /const guestSeats = host && settings\.showGuestSlots[\s\S]*data-seat/);
+  assert.match(liveView, /const guestSeats = settings\.showGuestSlots[\s\S]*data-seat/);
+  assert.match(liveView, /\['approval', t\('admissionApproval'\)\], \['open', t\('admissionDirect'\)\]/);
+  assert.match(liveControls, /\['approval', t\('admissionApproval'\)\], \['open', t\('admissionDirect'\)\]/);
+  assert.match(roomApi, /settings\.admission === 'open'[\s\S]*mw_live_room_allocate_guest_seat/);
+  assert.match(seatAllocation, /for update[\s\S]*seated_count >= seat_limit[\s\S]*state = 'speaker'/i);
   assert.match(liveControls, /toggleRow\(t\('showGuestSlots'\)/);
   assert.match(liveSession, /adaptiveStream: true,[\s\S]*dynacast: true,[\s\S]*publishDefaults:/);
   assert.match(liveSession, /static warm\(live\)/);
@@ -746,7 +751,8 @@ test('LIVE host guest requests refresh from member realtime and expose accept an
   assert.match(controls, /openGuests\(\)\s*\{[\s\S]*this\.guestSheet\.open\(\);[\s\S]*this\.session\.refresh\(\)/);
   assert.match(controls, /actionBtn\(t\('accept'\),\s*\(\) => run\(s, 'approve'/);
   assert.match(controls, /actionBtn\(t\('decline'\),\s*\(\) => run\(s, 'reject'/);
-  assert.match(liveView, /'approve-request' \? 'approve' : 'reject'/);
+  assert.match(liveView, /approve\.addEventListener\('click'[\s\S]*handleRequestAction\(slide, session, 'approve'/);
+  assert.match(liveView, /reject\.addEventListener\('click'[\s\S]*handleRequestAction\(slide, session, 'reject'/);
   assert.match(migration, /alter publication supabase_realtime add table public\.mw_live_room_members/i);
   assert.match(repair, /20261202_milkyway_live_member_realtime\.sql/);
 });
@@ -800,6 +806,72 @@ test('LIVE guest request uses the authenticated request RPC and returns its pers
     });
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test('LIVE open admission allocates a stage seat without creating a pending request', async () => {
+  const viewerId = '22222222-2222-4222-8222-222222222222';
+  const hostId = '11111111-1111-4111-8111-111111111111';
+  const room = 'mw-video-live-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const originalFetch = globalThis.fetch;
+  const originalEnv = Object.fromEntries(['LIVEKIT_URL', 'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET'].map(key => [key, process.env[key]]));
+  const rpcCalls = [];
+  const livekitCalls = [];
+  process.env.LIVEKIT_URL = 'http://livekit.test';
+  process.env.LIVEKIT_API_KEY = 'test-key';
+  process.env.LIVEKIT_API_SECRET = 'test-secret';
+  globalThis.fetch = async (input, init = {}) => {
+    const address = String(input);
+    if (address.endsWith('/auth/v1/user')) return new Response(JSON.stringify({ id: viewerId }), { status: 200 });
+    if (address.includes('/rest/v1/mw_video_live_sessions?')) {
+      return new Response(JSON.stringify([{ host_id: hostId, scope: 'public', is_live: true }]), { status: 200 });
+    }
+    if (address.includes('/rest/v1/mw_live_room_settings?')) {
+      return new Response(JSON.stringify([{ settings: { admission: 'open', allowRequests: true, layout: 3 } }]), { status: 200 });
+    }
+    if (address.includes('/rest/v1/mw_live_room_members?')) return new Response('[]', { status: 200 });
+    if (address.includes('/rest/v1/mw_profiles?')) {
+      return new Response(JSON.stringify([{ display_name: 'Viewer', avatar_url: '' }]), { status: 200 });
+    }
+    if (address.includes('/twirp/livekit.RoomService/UpdateParticipant')) {
+      livekitCalls.push({ address, body: JSON.parse(init.body || '{}') });
+      return new Response('{}', { status: 200 });
+    }
+    if (address.includes('/rest/v1/rpc/')) {
+      const body = JSON.parse(init.body || '{}');
+      rpcCalls.push({ address, body });
+      return new Response(JSON.stringify(address.endsWith('/mw_live_room_allocate_guest_seat') ? 'speaker' : []), { status: 200 });
+    }
+    throw new Error(`Unexpected open seating API call: ${address}`);
+  };
+
+  try {
+    let status = 200, payload;
+    const response = {
+      headersSent: false,
+      setHeader() { return response; },
+      status(code) { status = code; return response; },
+      json(value) { payload = value; response.headersSent = true; return response; },
+    };
+    await liveRoom({
+      method: 'POST',
+      headers: { authorization: 'Bearer open-seat-test-token', apikey: 'test-public-key' },
+      query: {},
+      body: { room, action: 'request' },
+      headers: { authorization: `Bearer ${viewerId}`, apikey: 'test-public-key' },
+    }, response);
+    assert.equal(status, 200);
+    assert.deepEqual(payload, { state: 'speaker', invited: false });
+    assert.equal(livekitCalls.length, 1);
+    assert.equal(livekitCalls[0].body.identity, viewerId);
+    assert.ok(rpcCalls.some(call => call.address.endsWith('/mw_live_room_allocate_guest_seat')));
+    assert.ok(!rpcCalls.some(call => call.address.endsWith('/mw_live_room_request')));
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 });
 

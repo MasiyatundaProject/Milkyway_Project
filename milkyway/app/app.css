@@ -336,6 +336,8 @@ html[data-muted] .mute-toggle .i-sound, html:not([data-muted]) .mute-toggle .i-m
 
 .live-bar .icon-btn.has-badge { position: relative; }
 .live-badge-count { position: absolute; top: -2px; right: -2px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #ff3b6b; font-size: 11px; font-weight: 800; display: grid; place-items: center; }
+.live-bar .icon-btn.has-badge:has(.live-seat-count:not([hidden])) { display: flex; align-items: center; justify-content: center; gap: 4px; width: auto; min-width: 56px; padding: 0 8px; border-radius: 99px; }
+.live-seat-count { white-space: nowrap; font-size: 10px; font-weight: 800; color: rgba(255,255,255,.82); }
 .live-bar .stage-btn { color: var(--accent-2); }
 .live-bar .stage-btn.pending { color: #ffc93c; animation: livePulse 1.6s ease-in-out infinite; }
 
