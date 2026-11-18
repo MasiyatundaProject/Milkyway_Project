@@ -343,6 +343,33 @@ test('DM call connection validates token endpoints and offers an in-call retry o
   assert.match(translations, /callServiceLimited:/);
 });
 
+test('profile post queries fall back across optional schema columns and normalize absent media', () => {
+  const profile = readFileSync(new URL('../milkyway/app/ui/profile-view.js', import.meta.url), 'utf8');
+  assert.match(profile, /PROFILE_POST_REQUIRED = \['id', 'author_id', 'caption', 'media_url', 'media_type', 'created_at'\]/);
+  assert.match(profile, /PROFILE_POST_OPTIONAL = \['scheduled_at', 'slideshow_style', 'audio_url', 'media_items', 'media_preview_items'\]/);
+  assert.match(profile, /missingProfileColumn\(result\.error, optional\)/);
+  assert.match(profile, /optional\.splice\(optional\.indexOf\(missing\), 1\)/);
+  assert.match(profile, /Array\.isArray\(result\.data\) \? result\.data : \[\]/);
+  assert.match(profile, /media_url: mediaUrl, media_type: mediaType, media_items: mediaItems, media_preview_items: previews/);
+  assert.match(profile, /Array\.isArray\(post\.media_preview_items\)/);
+  assert.match(profile, /postsError \|\| t\('retry'\)/);
+});
+
+test('DM room cleanup RPC is installed and token issuance avoids cleanup management calls', () => {
+  const cleanupMigration = readFileSync(new URL('../supabase/migrations/20261127_milkyway_room_cleanup_enqueue_schema_cache.sql', import.meta.url), 'utf8');
+  const repair = readFileSync(new URL('../supabase/milkyway-schema-repair.sql', import.meta.url), 'utf8');
+  const callApi = readFileSync(new URL('../api/milkyway-call.js', import.meta.url), 'utf8');
+  const livekit = readFileSync(new URL('../api/_lib/livekit.js', import.meta.url), 'utf8');
+  assert.match(cleanupMigration, /create or replace function public\.mw_room_cleanup_enqueue\(p_room_name text\)/i);
+  assert.match(cleanupMigration, /grant execute on function public\.mw_room_cleanup_enqueue\(text\) to authenticated/i);
+  assert.match(cleanupMigration, /notify pgrst, 'reload schema'/i);
+  assert.match(repair, /create or replace function public\.mw_room_cleanup_enqueue\(p_room_name text\)/i);
+  assert.doesNotMatch(callApi, /retryRoomCleanups/);
+  assert.match(callApi, /closeRoom\(ctx, oldRoom, \{ immediate: false \}\)/);
+  assert.match(callApi, /closeRoom\(ctx, `mw-conversation-[\s\S]*?\{ immediate: false \}\)/);
+  assert.match(livekit, /if \(!immediate\) return false/);
+});
+
 test('LiveKit access tokens are pinned to the expected room and server across fallbacks', () => {
   const claims = Buffer.from(JSON.stringify({ video: { room: 'mw-video-live-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', roomJoin: true } })).toString('base64url');
   const access = {
@@ -491,7 +518,7 @@ test('composer and post viewer support client-assisted photo slideshows with opt
   assert.match(viewer, /preloaded\?\.decode\?\.\(\)/);
   assert.match(styles, /pv-image-page[\s\S]*@keyframes pvPageTurn/);
   assert.match(styles, /pv-image-slide[\s\S]*@keyframes pvSlide/);
-  assert.match(profile, /media_items,media_preview_items,audio_url,slideshow_style/);
+  assert.match(profile, /PROFILE_POST_OPTIONAL = \['scheduled_at', 'slideshow_style', 'audio_url', 'media_items', 'media_preview_items'\]/);
   assert.match(profile, /media_preview_items/);
   assert.match(migration, /add column if not exists media_items jsonb/i);
   assert.match(migration, /add column if not exists audio_url text/i);

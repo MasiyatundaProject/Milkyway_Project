@@ -1,5 +1,5 @@
 import { route, ApiError, SUPABASE, requireUuid } from './_lib/supa.js';
-import { livekitUrl, livekitUsable, accessToken, closeRoom, retryRoomCleanups, CAMERA, MIC } from './_lib/livekit.js';
+import { livekitUrl, livekitUsable, accessToken, closeRoom, CAMERA, MIC } from './_lib/livekit.js';
 
 const OUTCOMES = ['ended', 'missed', 'cancelled', 'rejected', 'disconnected'];
 const RING_WINDOW_MS = 60000;
@@ -70,7 +70,6 @@ export default route({
 
   start: async ({ ctx, body, method }) => {
     POST_ONLY(method);
-    await retryRoomCleanups(ctx, 1);
     const callee = requireUuid(body.callee, 'callee');
     if (callee === ctx.user.id) throw new ApiError(400, 'You cannot call yourself.');
     const mode = body.mode === 'video' ? 'video' : 'audio';
@@ -82,7 +81,7 @@ export default route({
     }) || [];
     for (const oldCall of previous) {
       const oldRoom = `mw-conversation-${oldCall.offer?.mode === 'video' ? 'video' : 'audio'}-${oldCall.id}`;
-      await closeRoom(ctx, oldRoom);
+      await closeRoom(ctx, oldRoom, { immediate: false });
     }
     const [call] = await ctx.rest('mw_dm_calls', { method: 'POST', returning: true, body: { caller_id: ctx.user.id, callee_id: callee, status: 'ringing', offer: { transport: 'livekit', mode, name } } }) || [];
     if (!call) throw new ApiError(503, 'Call could not start.');
@@ -134,7 +133,6 @@ export default route({
 
   token: async ({ ctx, body, method }) => {
     POST_ONLY(method);
-    await retryRoomCleanups(ctx, 1);
     let call = await loadCall(ctx, body.id);
     if (!['ringing', 'accepted'].includes(call.status)) throw new ApiError(409, 'This call has ended.');
     const ringingAge = Date.now() - Date.parse(call.created_at);
@@ -144,7 +142,7 @@ export default route({
         body: { status: 'ended', ended_at: new Date().toISOString(), answer: { outcome: 'missed' } },
       }) || [];
       call = ended || call;
-      await closeRoom(ctx, `mw-conversation-${call.offer?.mode === 'video' ? 'video' : 'audio'}-${call.id}`);
+      await closeRoom(ctx, `mw-conversation-${call.offer?.mode === 'video' ? 'video' : 'audio'}-${call.id}`, { immediate: false });
       throw new ApiError(409, 'This call has ended.');
     }
     return access(ctx, call, cleanName(body.name));

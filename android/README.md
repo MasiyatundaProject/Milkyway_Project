@@ -8,6 +8,10 @@ The app starts at `https://www.masiyatunda.com/milkyway/`, the canonical app URL
 
 If Creator Studio reports that `mw_creator_services` is missing from the Supabase schema cache, apply `supabase/migrations/20261127_milkyway_creator_services_schema_cache.sql` in the Supabase SQL editor. It repairs the table and grants `public` schema access before notifying PostgREST to reload. Alternatively, regenerate and run `supabase/milkyway-schema-repair.sql` for a full repair.
 
+## DM room cleanup RPC
+
+If calls report that `mw_room_cleanup_enqueue(text)` is missing from the PostgREST schema cache, apply `supabase/migrations/20261127_milkyway_room_cleanup_enqueue_schema_cache.sql`, which recreates the authenticated RPC and its queue table and reloads the schema cache. The call-token endpoint does not drain room-cleanup jobs; this keeps LiveKit management API usage out of call initialization.
+
 ## Push notifications and background calls
 
 The Android app uses Firebase Cloud Messaging (FCM); installed web apps use Web Push through the service worker. Apply the `supabase/migrations/20261127_milkyway_push_delivery.sql` migration (or regenerate and apply `supabase/milkyway-schema-repair.sql`) before enabling delivery. Configure these private Render environment variables:

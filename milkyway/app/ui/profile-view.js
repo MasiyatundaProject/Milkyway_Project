@@ -13,13 +13,37 @@ import { isOwnerAccount } from './admin-view.js';
 
 const quiet = promise => Promise.resolve(promise).then(result => result, () => ({}));
 
+const PROFILE_POST_REQUIRED = ['id', 'author_id', 'caption', 'media_url', 'media_type', 'created_at'];
+const PROFILE_POST_OPTIONAL = ['scheduled_at', 'slideshow_style', 'audio_url', 'media_items', 'media_preview_items'];
+
+function missingProfileColumn(error, columns) {
+  const message = String(error?.message || '');
+  if (!['PGRST204', '42703'].includes(String(error?.code || ''))
+    && !/schema cache|column .* does not exist|could not find the .*column/i.test(message)) return null;
+  return columns.find(column => new RegExp(`\\b${column}\\b`, 'i').test(message)) || columns[columns.length - 1] || null;
+}
+
 async function loadProfilePosts(sb, id) {
-  const fields = 'id,author_id,caption,media_url,media_type,media_items,media_preview_items,audio_url,slideshow_style,scheduled_at,created_at';
-  let result = await sb.from('mw_posts').select(fields).eq('author_id', id).order('created_at', { ascending: false }).limit(30);
-  if (result.error && /media_preview_items/i.test(result.error.message || '')) {
-    result = await sb.from('mw_posts').select(fields.replace(',media_preview_items', '')).eq('author_id', id).order('created_at', { ascending: false }).limit(30);
+  const optional = [...PROFILE_POST_OPTIONAL];
+  while (true) {
+    const fields = [...PROFILE_POST_REQUIRED, ...optional].join(',');
+    const result = await sb.from('mw_posts').select(fields).eq('author_id', id).order('created_at', { ascending: false }).limit(30);
+    if (!result.error) {
+      const rows = Array.isArray(result.data) ? result.data : [];
+      return { ...result, data: rows.filter(row => row && typeof row === 'object').map(normalizeProfilePost) };
+    }
+    const missing = missingProfileColumn(result.error, optional);
+    if (!missing) return result;
+    optional.splice(optional.indexOf(missing), 1);
   }
-  return result;
+}
+
+function normalizeProfilePost(row) {
+  const mediaItems = Array.isArray(row.media_items) ? row.media_items.filter(item => typeof item === 'string') : [];
+  const previews = Array.isArray(row.media_preview_items) ? row.media_preview_items.filter(item => typeof item === 'string') : [];
+  const mediaUrl = typeof row.media_url === 'string' && row.media_url ? row.media_url : mediaItems[0] || '';
+  const mediaType = typeof row.media_type === 'string' ? row.media_type : /\.(mp4|m4v|mov|webm|ogv|3gp)(\?|#|$)/i.test(mediaUrl) ? 'video' : mediaUrl ? 'image' : null;
+  return { ...row, media_url: mediaUrl, media_type: mediaType, media_items: mediaItems, media_preview_items: previews };
 }
 
 export class ProfileView {
@@ -115,9 +139,15 @@ export class ProfileView {
       profiles.prime([{ id, name: person.name, username: person.username, avatar: person.avatar }]);
       if (!this.own) this.sheet.title = person.name;
       const { data: pin } = await quiet(sb.from('mw_creator_pins').select('post_id').eq('creator_id', id).maybeSingle());
-      const profilePosts = posts.data || [];
+      const profilePosts = Array.isArray(posts.data) ? posts.data : [];
       if (pin?.post_id) profilePosts.sort((a, b) => Number(b.id === pin.post_id) - Number(a.id === pin.post_id));
-      this.#render({ profile: person, followers: followers.count || 0, following: following.count || 0, posts: profilePosts });
+      this.#render({
+        profile: person,
+        followers: followers.count || 0,
+        following: following.count || 0,
+        posts: profilePosts,
+        postsError: posts.error?.message || '',
+      });
       this.#loadBusiness(person, token);
     } catch {
       if (token === this.token) this.#render({ profile: profiles.peek(id) || { id }, error: true });
@@ -185,9 +215,10 @@ export class ProfileView {
     return card;
   }
 
-  #render({ profile, followers = 0, following = 0, posts = [], loading = false, error = false }) {
-    this.posts = posts.slice();
-    this.postCount = h('b', {}, count(posts.length));
+  #render({ profile, followers = 0, following = 0, posts = [], loading = false, error = false, postsError = '' }) {
+    profile = profile && typeof profile === 'object' ? profile : { id: this.id || auth.userId || '' };
+    this.posts = Array.isArray(posts) ? posts.filter(post => post && typeof post === 'object') : [];
+    this.postCount = h('b', {}, count(this.posts.length));
     const stats = h('div', { class: 'profile-stats' },
       h('span', {}, this.postCount, t('posts')),
       h('span', {}, h('b', {}, count(followers)), t('followers')),
@@ -222,8 +253,8 @@ export class ProfileView {
 
     const grid = this.grid = h('div', { class: 'profile-grid' });
     if (loading) grid.append(h('p', { class: 'muted center' }, t('loading')));
-    else if (error) grid.append(h('p', { class: 'muted center' }, t('retry')));
-    else if (!posts.length) grid.append(h('p', { class: 'muted center' }, this.own ? t('noPostsYet') : t('empty')));
+    else if (error || postsError) grid.append(h('p', { class: 'muted center', role: 'status' }, postsError || t('retry')));
+    else if (!this.posts.length) grid.append(h('p', { class: 'muted center' }, this.own ? t('noPostsYet') : t('empty')));
     else grid.append(...this.posts.map(post => tile(post, {
       open: () => this.#openPost(post),
       menu: this.own ? () => this.#postMenu(post) : null,
@@ -270,13 +301,13 @@ export class ProfileView {
 
 function tile(post, { open, menu }) {
   const kind = postKind(post);
-  const url = post.media_url || '';
-  const node = h('div', { class: `profile-tile ${kind}`, role: 'button', tabindex: '0', 'data-post': String(post.id), 'aria-label': post.caption || t('post') });
+  const url = typeof post?.media_url === 'string' ? post.media_url : '';
+  const node = h('div', { class: `profile-tile ${kind}`, role: 'button', tabindex: '0', 'data-post': String(post?.id || ''), 'aria-label': post?.caption || t('post') });
   if (kind === 'video') {
     const still = poster(url, 360);
     if (still) {
       const img = h('img', { alt: '', loading: 'lazy', decoding: 'async', draggable: 'false' });
-      setImage(img, `${url}.poster.jpg`, 360, { quality: 60 });
+      setImage(img, still, 360, { quality: 60, onFail: () => { img.remove(); node.classList.add('missing'); } });
       node.append(img);
     } else {
       node.classList.add('missing');
@@ -285,7 +316,7 @@ function tile(post, { open, menu }) {
     node.append(h('span', { class: 'tile-badge', html: icon.play, 'aria-hidden': 'true' }));
   } else if (kind === 'image') {
     const img = h('img', { alt: post.caption || '', loading: 'lazy', decoding: 'async', draggable: 'false' });
-    const preview = post.media_preview_items?.[0] || url;
+    const preview = Array.isArray(post.media_preview_items) ? post.media_preview_items[0] || url : url;
     setImage(img, preview, 360, { quality: 65, onFail: () => { node.classList.add('missing'); img.remove(); node.prepend(h('span', { class: 'tile-missing', 'aria-hidden': 'true' }, '🖼')); } });
     node.append(img);
   } else {

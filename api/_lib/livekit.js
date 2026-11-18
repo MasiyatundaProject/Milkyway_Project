@@ -123,8 +123,9 @@ async function runCleanup(ctx, job) {
 }
 
 /** Queue and immediately attempt an idempotent room close; failed closes remain available for retry. */
-export async function closeRoom(ctx, roomName) {
+export async function closeRoom(ctx, roomName, { immediate = true } = {}) {
   await ctx.rpc('mw_room_cleanup_enqueue', { p_room_name: roomName });
+  if (!immediate) return false;
   const job = await claimCleanup(ctx, roomName);
   return job ? runCleanup(ctx, job) : true;
 }
