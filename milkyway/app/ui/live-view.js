@@ -286,15 +286,13 @@ function applyRoom(slide, session, status) {
 function paintStageButton(slide, session) {
   const r = slide._refs;
   if (session.host) return;
-  const settings = session.settings;
   const stage = session.stage;
-  const canAsk = settings.admission !== 'broadcast' && settings.allowRequests !== false;
   const label = stage === 'requested' ? t('requested') : stage === 'invited' ? t('joinAsGuest') : stage === 'joining' ? t('joiningStage') : t('requestJoin');
   r.stageBtn.hidden = stage === 'guest';
-  r.stageBtn.disabled = stage === 'joining' || !!session.stageAction || (stage === 'audience' && !canAsk);
+  r.stageBtn.disabled = stage === 'joining' || !!session.stageAction;
   r.stageBtn.classList.toggle('pending', stage === 'requested' || stage === 'joining');
   r.stageBtn.classList.toggle('invited', stage === 'invited');
-  r.stageBtn.classList.toggle('closed', stage === 'audience' && !canAsk);
+  r.stageBtn.classList.remove('closed');
   r.stageBtn.setAttribute('aria-pressed', String(stage === 'requested'));
   r.stageLabel.textContent = label;
   r.stageBtn.setAttribute('aria-label', label);

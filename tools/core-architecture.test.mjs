@@ -435,6 +435,9 @@ test('LIVE guest stage grants publisher permissions and renders allocated guest 
   assert.match(tokenApi, /const approvedGuest = !isHost && member\?\.state === 'speaker'/);
   assert.doesNotMatch(tokenApi, /body\.stage === true[\s\S]*member\?\.state === 'speaker'/);
   assert.match(tokenApi, /approvedGuest \? \(audio \? \(member\.host_muted \? \[\] : \[MIC\]\) : \(member\.host_muted \? \[CAMERA\] : \[CAMERA, MIC\]\)\)/);
+  const stageButton = liveView.match(/function paintStageButton\(slide, session\) \{([\s\S]*?)\n\}/)?.[1] || '';
+  assert.match(stageButton, /r\.stageBtn\.disabled = stage === 'joining' \|\| !!session\.stageAction/);
+  assert.doesNotMatch(stageButton, /allowRequests|admission|canAsk/);
   assert.match(liveView, /const guestSeats = host && settings\.showGuestSlots[\s\S]*data-seat/);
   assert.match(liveControls, /toggleRow\(t\('showGuestSlots'\)/);
   assert.match(liveSession, /adaptiveStream: true,[\s\S]*dynacast: true,[\s\S]*publishDefaults:/);
