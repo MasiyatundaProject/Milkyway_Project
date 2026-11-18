@@ -15,6 +15,27 @@ const quiet = promise => Promise.resolve(promise).then(result => result, () => (
 
 const PROFILE_POST_REQUIRED = ['id', 'author_id', 'caption', 'media_url', 'media_type', 'created_at'];
 const PROFILE_POST_OPTIONAL = ['scheduled_at', 'slideshow_style', 'audio_url', 'media_items', 'media_preview_items'];
+const PROFILE_PHOTO_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const PROFILE_PHOTO_MAX_BYTES = 10 * 1024 * 1024;
+const PROFILE_PHOTO_MAX_PIXELS = 40_000_000;
+
+async function validateProfilePhoto(file) {
+  if (!file || !PROFILE_PHOTO_TYPES.has(file.type)) throw new Error(t('photoUnsupported'));
+  if (file.size > PROFILE_PHOTO_MAX_BYTES) throw new Error(t('photoTooLarge'));
+  const url = URL.createObjectURL(file);
+  try {
+    const dimensions = await new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve([image.naturalWidth, image.naturalHeight]);
+      image.onerror = () => reject(new Error(t('photoUnsupported')));
+      image.src = url;
+    });
+    if (!dimensions[0] || !dimensions[1]) throw new Error(t('photoUnsupported'));
+    if (dimensions[0] * dimensions[1] > PROFILE_PHOTO_MAX_PIXELS) throw new Error(t('photoTooLarge'));
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
 
 function missingProfileColumn(error, columns) {
   const message = String(error?.message || '');
@@ -280,21 +301,99 @@ export class ProfileView {
     const bio = h('textarea', { class: 'field area', maxlength: '300', placeholder: t('bio') });
     bio.value = profile.bio || '';
     const message = h('p', { class: 'muted', role: 'status' });
+    const photoInput = h('input', { type: 'file', accept: [...PROFILE_PHOTO_TYPES].join(','), hidden: true });
+    const photoPreview = h('div', { class: 'profile-photo-preview' }, avatar(profile, 72));
+    let selectedPhoto = null;
+    let previewUrl = '';
+    let selectionVersion = 0;
+    const choosePhoto = h('button', { class: 'pill-btn', type: 'button', onclick: () => photoInput.click() }, t('choosePhoto'));
+    const clearPreview = () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      previewUrl = '';
+      photoPreview.replaceChildren(avatar(profile, 72));
+    };
+    photoInput.addEventListener('change', async event => {
+      const file = event.currentTarget.files?.[0] || null;
+      if (!file) return;
+      const version = ++selectionVersion;
+      selectedPhoto = null;
+      clearPreview();
+      try {
+        await validateProfilePhoto(file);
+        if (version !== selectionVersion) return;
+        previewUrl = URL.createObjectURL(file);
+        selectedPhoto = file;
+        photoPreview.replaceChildren(avatar({ ...profile, avatar: previewUrl }, 72));
+        message.textContent = '';
+      } catch (error) {
+        if (version !== selectionVersion) return;
+        photoInput.value = '';
+        message.textContent = error?.message || t('photoUnsupported');
+      }
+    });
     const submit = h('button', { class: 'pill-btn hot wide', type: 'submit' }, t('save'));
     this.content.replaceChildren(h('form', { class: 'stack', onsubmit: async event => {
       event.preventDefault();
       const handle = username.value.trim().replace(/^@/, '');
       if (handle && !/^[A-Za-z0-9._]{2,30}$/.test(handle)) { message.textContent = t('usernameRule'); return; }
-      submit.disabled = true; message.textContent = t('loading');
+      if (!auth.userId) { message.textContent = t('signInToContinue'); return; }
+      submit.disabled = true; choosePhoto.disabled = true; photoInput.disabled = true;
+      message.textContent = selectedPhoto ? t('uploading') : t('loading');
+      let uploadedPath = '';
       try {
         const sb = await supabase();
-        const { error } = await sb.from('mw_profiles').update({ display_name: name.value.trim(), username: handle || null, bio: bio.value.trim() || null }).eq('id', auth.userId);
+        let avatarUrl;
+        if (selectedPhoto) {
+          const extension = selectedPhoto.type === 'image/jpeg' ? 'jpg' : selectedPhoto.type.slice('image/'.length);
+          uploadedPath = `milkyway/${auth.userId}/avatars/${crypto.randomUUID()}.${extension}`;
+          const { error: uploadError } = await sb.storage.from('portfolio').upload(uploadedPath, selectedPhoto, {
+            contentType: selectedPhoto.type,
+            cacheControl: '3600',
+            upsert: false,
+          });
+          if (uploadError) throw uploadError;
+          const result = sb.storage.from('portfolio').getPublicUrl(uploadedPath);
+          avatarUrl = result?.data?.publicUrl;
+          if (!avatarUrl) throw new Error(t('photoUploadFailed'));
+        }
+        const changes = { display_name: name.value.trim(), username: handle || null, bio: bio.value.trim() || null };
+        if (avatarUrl) changes.avatar_url = avatarUrl;
+        const { data: saved, error } = await sb.from('mw_profiles').update(changes).eq('id', auth.userId).select('id,display_name,username,avatar_url').maybeSingle();
         if (error) throw error;
+        if (!saved) throw new Error(t('profileSettingsUnavailable'));
+        if (avatarUrl && saved.avatar_url !== avatarUrl) throw new Error(t('profileSettingsUnavailable'));
+        const updatedProfile = {
+          id: saved.id,
+          name: saved.display_name || name.value.trim(),
+          username: saved.username || '',
+          avatar: saved.avatar_url || '',
+        };
+        profiles.update(updatedProfile);
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+        previewUrl = '';
         toast('✓');
         this.#load(this.id);
-      } catch (error) { message.textContent = error.message || t('retry'); submit.disabled = false; }
-    } }, name, username, bio, submit, message,
-    h('button', { class: 'link center', type: 'button', onclick: () => this.#load(this.id) }, t('cancel'))));
+      } catch (error) {
+        if (uploadedPath) {
+          try {
+            const client = await supabase();
+            const { error: cleanupError } = await client.storage.from('portfolio').remove([uploadedPath]);
+            if (cleanupError) console.error('[profile] failed to clean up an unlinked photo upload', cleanupError);
+          } catch (cleanupError) {
+            console.error('[profile] failed to clean up an unlinked photo upload', cleanupError);
+          }
+        }
+        message.textContent = error?.message || t('photoUploadFailed');
+        submit.disabled = false; choosePhoto.disabled = false; photoInput.disabled = false;
+      }
+    } }, name, username, bio,
+    h('div', { class: 'stack profile-photo-edit' },
+      h('label', { class: 'muted' }, t('profilePhoto')),
+      photoPreview,
+      choosePhoto,
+      photoInput),
+    submit, message,
+    h('button', { class: 'link center', type: 'button', onclick: () => { selectionVersion++; selectedPhoto = null; clearPreview(); this.#load(this.id); } }, t('cancel'))));
   }
 
 }

@@ -19,8 +19,15 @@ export const profiles = {
       if (!profile?.id) continue;
       const before = memory.get(profile.id);
       memory.set(profile.id, profile);
-      if (!before || before.avatar !== profile.avatar || before.name !== profile.name) store.set(`profile:${profile.id}`, profile);
+      if (!before || before.avatar !== profile.avatar || before.name !== profile.name || before.username !== profile.username) store.set(`profile:${profile.id}`, profile);
     }
+  },
+  update(item) {
+    const profile = normalize(item);
+    if (!profile?.id) return;
+    memory.set(profile.id, profile);
+    store.set(`profile:${profile.id}`, profile);
+    bus.emit('profile', profile);
   },
   peek: id => memory.get(String(id)) || null,
   /** Many at once: memory → device → one network request for the rest. */

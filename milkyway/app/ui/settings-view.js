@@ -3,6 +3,7 @@
 import { config } from '../config.js';
 import { t, lang, languages, setLanguage } from '../core/i18n.js';
 import { api, auth, supabase } from '../core/net.js';
+import { bus } from '../core/events.js';
 import { presence } from '../data/presence.js';
 import { catalog, wallet } from '../data/gifts.js';
 import { Sheet } from './sheet.js';
@@ -174,6 +175,14 @@ export class NovaMenu {
     this.content = h('div', { class: 'nova-menu' });
     this.sheet.body.append(this.content);
     presence.subscribe(() => this.#paintPresence());
+    bus.on('profile', profile => {
+      if (String(profile?.id) !== String(auth.userId)) return;
+      this.profile = { ...this.profile, ...profile };
+      const currentAvatar = this.content.querySelector('.nova-card .avatar');
+      if (currentAvatar) currentAvatar.replaceWith(avatar(this.profile, 56));
+      const currentName = this.content.querySelector('.nova-card-text > b');
+      if (currentName) currentName.textContent = this.profile.name || auth.name;
+    });
   }
 
   open(profile = {}) {

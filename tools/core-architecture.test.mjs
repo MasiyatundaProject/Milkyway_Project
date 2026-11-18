@@ -357,6 +357,24 @@ test('profile post queries fall back across optional schema columns and normaliz
   assert.match(profile, /postsError \|\| t\('retry'\)/);
 });
 
+test('profile photo upload is scoped, saved to the profile, and refreshed in the shared cache', () => {
+  const profileView = readFileSync(new URL('../milkyway/app/ui/profile-view.js', import.meta.url), 'utf8');
+  const profileData = readFileSync(new URL('../milkyway/app/data/profiles.js', import.meta.url), 'utf8');
+  const settings = readFileSync(new URL('../milkyway/app/ui/settings-view.js', import.meta.url), 'utf8');
+  const migration = readFileSync(new URL('../supabase/migrations/20261206_milkyway_profile_avatar_storage.sql', import.meta.url), 'utf8');
+  const repair = readFileSync(new URL('../supabase/milkyway-schema-repair.sql', import.meta.url), 'utf8');
+  assert.match(profileView, /event\.currentTarget\.files\?\.\[0\] \|\| null/);
+  assert.match(profileView, /PROFILE_PHOTO_TYPES = new Set\(\['image\/jpeg', 'image\/png', 'image\/webp'\]\)/);
+  assert.match(profileView, /storage\.from\('portfolio'\)\.upload\(uploadedPath, selectedPhoto/);
+  assert.match(profileView, /changes\.avatar_url = avatarUrl/);
+  assert.match(profileView, /profiles\.update\(updatedProfile\)/);
+  assert.match(profileData, /bus\.emit\('profile', profile\)/);
+  assert.match(settings, /bus\.on\('profile'/);
+  assert.match(migration, /on conflict \(id\) do update set public = true/i);
+  assert.match(migration, /\(storage\.foldername\(name\)\)\[2\] = auth\.uid\(\)::text/);
+  assert.match(repair, /mw_profile_avatar_insert/);
+});
+
 test('DM room cleanup RPC is installed and token issuance avoids cleanup management calls', () => {
   const cleanupMigration = readFileSync(new URL('../supabase/migrations/20261127_milkyway_room_cleanup_enqueue_schema_cache.sql', import.meta.url), 'utf8');
   const cleanupRepair = readFileSync(new URL('../supabase/migrations/20261128_milkyway_room_cleanup_enqueue_repair.sql', import.meta.url), 'utf8');
