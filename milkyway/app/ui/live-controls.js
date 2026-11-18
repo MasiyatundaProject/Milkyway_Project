@@ -99,7 +99,11 @@ export class HostControls {
 
   destroy() { this.offs.forEach(off => off()); this.sheets.forEach(sheet => sheet.root.remove()); }
 
-  openGuests() { this.#renderGuests(); this.guestSheet.open(); }
+  openGuests() {
+    this.#renderGuests();
+    this.guestSheet.open();
+    this.session.refresh();
+  }
   /** Moderation: comment rules plus everyone watching, with quick mute / remove and the muted and removed lists. */
   openModeration() { this.#renderModeration(); this.moderationSheet.open(); }
   openSettings() { this.#renderSettings(); this.settingsSheet.open(); }

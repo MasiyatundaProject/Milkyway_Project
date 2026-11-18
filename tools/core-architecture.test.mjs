@@ -736,6 +736,21 @@ test('LIVE room table privileges are granted to authenticated users and limited 
   assert.match(repair, /supabase\/migrations\/20261125_milkyway_live_room_rls\.sql/);
 });
 
+test('LIVE host guest requests refresh from member realtime and expose accept and decline actions', () => {
+  const liveSession = readFileSync(new URL('../milkyway/app/ui/live-session.js', import.meta.url), 'utf8');
+  const controls = readFileSync(new URL('../milkyway/app/ui/live-controls.js', import.meta.url), 'utf8');
+  const liveView = readFileSync(new URL('../milkyway/app/ui/live-view.js', import.meta.url), 'utf8');
+  const migration = readFileSync(new URL('../supabase/migrations/20261202_milkyway_live_member_realtime.sql', import.meta.url), 'utf8');
+  const repair = readFileSync(new URL('../supabase/milkyway-schema-repair.sql', import.meta.url), 'utf8');
+  assert.match(liveSession, /\.on\('postgres_changes',\s*\{[\s\S]*table: 'mw_live_room_members'[\s\S]*filter: `room_name=eq\.\$\{this\.live\.room\}`[\s\S]*this\.#refreshSoon\(\)/);
+  assert.match(controls, /openGuests\(\)\s*\{[\s\S]*this\.guestSheet\.open\(\);[\s\S]*this\.session\.refresh\(\)/);
+  assert.match(controls, /actionBtn\(t\('accept'\),\s*\(\) => run\(s, 'approve'/);
+  assert.match(controls, /actionBtn\(t\('decline'\),\s*\(\) => run\(s, 'reject'/);
+  assert.match(liveView, /'approve-request' \? 'approve' : 'reject'/);
+  assert.match(migration, /alter publication supabase_realtime add table public\.mw_live_room_members/i);
+  assert.match(repair, /20261202_milkyway_live_member_realtime\.sql/);
+});
+
 test('LIVE guest request uses the authenticated request RPC and returns its persisted state', async () => {
   const viewerId = '22222222-2222-4222-8222-222222222222';
   const hostId = '11111111-1111-4111-8111-111111111111';

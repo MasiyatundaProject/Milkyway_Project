@@ -4382,3 +4382,24 @@ grant execute on function public.mw_live_room_request(text, text, text) to authe
 
 commit;
 notify pgrst, 'reload schema';
+
+-- supabase/migrations/20261202_milkyway_live_member_realtime.sql
+-- Publish LIVE member changes so hosts receive guest requests and decisions immediately.
+begin;
+
+do $$
+begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime')
+    and not exists (
+      select 1
+      from pg_publication_tables
+      where pubname = 'supabase_realtime'
+        and schemaname = 'public'
+        and tablename = 'mw_live_room_members'
+    ) then
+    alter publication supabase_realtime add table public.mw_live_room_members;
+  end if;
+end
+$$;
+
+commit;

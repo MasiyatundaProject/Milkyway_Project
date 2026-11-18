@@ -702,7 +702,21 @@ export class LiveSession extends Emitter {
           const n = Object.keys(channel.presenceState()).length;
           if (n && n !== this.viewers) { this.viewers = n; this.emit('viewers', n); }
         })
-        .subscribe(status => { if (status === 'SUBSCRIBED') channel.track({ at: Date.now() }).catch(() => {}); });
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'mw_live_room_members',
+          filter: `room_name=eq.${this.live.room}`,
+        }, () => this.#refreshSoon())
+        .subscribe(status => {
+          if (status === 'SUBSCRIBED') {
+            channel.track({ at: Date.now() }).catch(() => {});
+            this.#refreshSoon();
+          }
+          else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            console.warn('[live] member realtime unavailable; status polling remains active', status);
+          }
+        });
       this.channel = channel;
     } catch { /* LiveKit data still works */ }
   }
