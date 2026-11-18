@@ -24,6 +24,7 @@ export class GroupCreateSheet {
     this.sheet = new Sheet({ title: t('createGroup'), className: 'group-manage-sheet' });
     this.name = h('input', { class: 'field', maxlength: '70', required: true, placeholder: t('groupName'), 'aria-label': t('groupName') });
     this.caption = h('input', { class: 'field', maxlength: '120', placeholder: t('groupCaption'), 'aria-label': t('groupCaption') });
+    this.avatarUrl = h('input', { class: 'field', type: 'url', placeholder: 'https://…', 'aria-label': t('groupAvatarUrl') });
     this.mode = h('select', { class: 'field', 'aria-label': t('joinMode') },
       h('option', { value: 'open' }, t('joinOpen')),
       h('option', { value: 'request_approval' }, t('joinApproval')),
@@ -33,6 +34,7 @@ export class GroupCreateSheet {
     this.sheet.body.append(
       h('label', { class: 'group-field' }, h('span', {}, t('groupName')), this.name),
       h('label', { class: 'group-field' }, h('span', {}, t('groupCaption')), this.caption),
+      h('label', { class: 'group-field' }, h('span', {}, t('groupAvatarUrl')), this.avatarUrl),
       h('label', { class: 'group-field' }, h('span', {}, t('joinMode')), this.mode),
       h('label', { class: 'group-check' }, this.invites, h('span', {}, t('membersCanInvite'))),
       this.submit);
@@ -41,6 +43,7 @@ export class GroupCreateSheet {
   open() {
     this.name.value = '';
     this.caption.value = '';
+    this.avatarUrl.value = '';
     this.mode.value = 'invite_only';
     this.invites.checked = true;
     this.sheet.open();
@@ -52,7 +55,7 @@ export class GroupCreateSheet {
     this.submit.disabled = true;
     try {
       const data = await createGroup({
-        name, caption: this.caption.value.trim(), description: '',
+        name, caption: this.caption.value.trim(), description: '', avatarUrl: this.avatarUrl.value.trim(),
         joinMode: this.mode.value, membersCanInvite: this.invites.checked,
       });
       this.sheet.close();

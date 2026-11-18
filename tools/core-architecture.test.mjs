@@ -28,6 +28,7 @@ test('group management schema and UI implement guarded joins, invitations and co
   assert.match(migration, /members_can_invite/);
   assert.match(migration, /mw_group_join_request_decide/);
   assert.match(migration, /Only the group creator can change administrator roles/);
+  assert.match(migration, /Only the group creator can remove an admin or co-admin/);
   assert.match(migration, /Only group members can invite people/);
   assert.match(migration, /mw_group_create_advanced\(\s*p_name, p_caption, p_description, '', 'invite_only'/);
   assert.match(migration, /join_status in \('active', 'invited'\)/);
@@ -37,6 +38,7 @@ test('group management schema and UI implement guarded joins, invitations and co
   assert.match(inbox, /discoverGroups/);
   assert.match(inbox, /joinAndOpenGroup/);
   assert.match(view, /makeCoAdmin/);
+  assert.match(view, /this\.avatarUrl/);
   assert.match(view, /decideGroupRequest/);
   assert.match(view, /sendGroupMessage/);
   assert.match(data, /mw_dm_group_messages/);

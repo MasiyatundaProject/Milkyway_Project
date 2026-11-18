@@ -283,6 +283,35 @@ begin
   update public.mw_dm_group_members set role = p_role where group_id = p_group and user_id = p_user;
 end $$;
 
+create or replace function public.mw_group_remove_member(p_group uuid, p_user uuid, p_block boolean)
+returns void language plpgsql security definer set search_path = ''
+as $$
+declare
+  me uuid := auth.uid();
+  creator uuid;
+  target_role text;
+begin
+  if me is null then raise exception 'Sign in first.' using errcode = '28000'; end if;
+  if not public.mw_dm_is_group_admin(p_group, me) then
+    raise exception 'Only admins and co-admins can remove members.' using errcode = '42501';
+  end if;
+  if p_user = me then raise exception 'Use leave instead.' using errcode = '22023'; end if;
+  select created_by into creator from public.mw_dm_groups where id = p_group;
+  if creator is null then raise exception 'Group not found.' using errcode = 'P0002'; end if;
+  if p_user = creator then raise exception 'The creator cannot be removed.' using errcode = '42501'; end if;
+  select role into target_role from public.mw_dm_group_members
+    where group_id = p_group and user_id = p_user;
+  if target_role is null then raise exception 'Not a group member.' using errcode = 'P0002'; end if;
+  if target_role in ('admin', 'co_admin') and me <> creator then
+    raise exception 'Only the group creator can remove an admin or co-admin.' using errcode = '42501';
+  end if;
+  delete from public.mw_dm_group_members where group_id = p_group and user_id = p_user;
+  if coalesce(p_block, false) then
+    insert into public.mw_dm_group_blocks(group_id, user_id, blocked_by)
+      values (p_group, p_user, me) on conflict do nothing;
+  end if;
+end $$;
+
 create or replace function public.mw_group_update(p_group uuid, p_name text, p_caption text, p_description text)
 returns void language plpgsql security definer set search_path = ''
 as $$
@@ -352,6 +381,7 @@ revoke all on function public.mw_group_join(uuid) from public, anon;
 revoke all on function public.mw_group_add_members(uuid, uuid[]) from public, anon;
 revoke all on function public.mw_group_join_request_decide(uuid, uuid, boolean) from public, anon;
 revoke all on function public.mw_group_set_role(uuid, uuid, text) from public, anon;
+revoke all on function public.mw_group_remove_member(uuid, uuid, boolean) from public, anon;
 revoke all on function public.mw_group_leave(uuid) from public, anon;
 grant execute on function public.mw_dm_is_group_member(uuid, uuid) to authenticated;
 grant execute on function public.mw_dm_is_group_admin(uuid, uuid) to authenticated;
@@ -361,6 +391,7 @@ grant execute on function public.mw_group_join(uuid) to authenticated;
 grant execute on function public.mw_group_add_members(uuid, uuid[]) to authenticated;
 grant execute on function public.mw_group_join_request_decide(uuid, uuid, boolean) to authenticated;
 grant execute on function public.mw_group_set_role(uuid, uuid, text) to authenticated;
+grant execute on function public.mw_group_remove_member(uuid, uuid, boolean) to authenticated;
 grant execute on function public.mw_group_leave(uuid) to authenticated;
 
 notify pgrst, 'reload schema';
