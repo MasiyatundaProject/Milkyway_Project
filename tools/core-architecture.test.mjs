@@ -720,8 +720,14 @@ test('LIVE room table privileges are granted to authenticated users and limited 
   assert.match(requestRpc, /room_settings -> 'blockedIds'.*lower\(me\)/);
   assert.match(requestRpc, /p_room_name, me::uuid,/);
   assert.match(requestRpcUuidFix, /me text := auth\.uid\(\)::text/);
-  assert.match(requestRpcUuidFix, /member\.user_id::text = me/);
+  assert.match(requestRpcUuidFix, /member\.user_id::text = me::text/);
   assert.match(requestRpcUuidFix, /session\.host_id::text/);
+  assert.match(requestRpcUuidFix, /session\.id::text[\s\S]*into live_host,\s*live_room_id/);
+  assert.match(requestRpcUuidFix, /live_host::text = me::text/);
+  assert.match(requestRpcUuidFix, /lower\(invite\.user_id_text::text\) = lower\(me::text\)/);
+  assert.match(requestRpcUuidFix, /lower\(blocked\.user_id::text\) = lower\(me::text\)/);
+  assert.match(requestRpcUuidFix, /room_id, room_name, user_id/);
+  assert.match(requestRpcUuidFix, /live_room_id::uuid, p_room_name, me::uuid,/);
   assert.match(requestRpcUuidFix, /notify pgrst, 'reload schema'/i);
   assert.match(requestRpc, /grant execute on function public\.mw_live_room_request\(text, text, text\) to authenticated/i);
   assert.match(roomApi, /ctx\.rpc\('mw_live_room_request', \{[\s\S]*p_room_name: room\.roomName/);
