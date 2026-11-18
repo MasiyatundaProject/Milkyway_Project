@@ -74,7 +74,7 @@ export class GroupChatSheet {
     this.group = null;
     this.messages = new Map();
     this.revealed = new Map();
-    this.sheet = new Sheet({ title: '', className: 'chat-sheet group-chat-sheet', onClose: () => { this.group = null; this.#clearRevealed(); } });
+    this.sheet = new Sheet({ title: '', className: 'chat-sheet group-chat-sheet', onClose: () => { this.group = null; this.composer.cancelRecording(); this.#clearRevealed(); } });
     this.sheet.heading.hidden = true;
     this.name = h('b', {});
     this.subtitle = h('small', { class: 'muted' });
@@ -96,6 +96,7 @@ export class GroupChatSheet {
 
   async open(group) {
     if (!group?.id) return;
+    this.composer.cancelRecording();
     this.#clearRevealed();
     this.group = group;
     this.messages.clear();

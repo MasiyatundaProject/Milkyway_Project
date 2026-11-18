@@ -168,7 +168,7 @@ export class InboxView {
 
 class ChatSheet {
   constructor() {
-    this.sheet = new Sheet({ title: '', className: 'chat-sheet', onClose: () => { this.peer = null; this.#clearRevealed(); } });
+    this.sheet = new Sheet({ title: '', className: 'chat-sheet', onClose: () => { this.peer = null; this.composer.cancelRecording(); this.#clearRevealed(); } });
     this.sheet.heading.hidden = true;
     this.name = h('b', {});
     this.state = h('small', { class: 'muted' });
@@ -194,6 +194,7 @@ class ChatSheet {
   }
 
   open(person) {
+    this.composer.cancelRecording();
     this.#clearRevealed();
     this.peer = { ...person, ...(profiles.peek(person.id) || {}), ...person };
     this.name.textContent = this.peer.name || 'MilkyWay';

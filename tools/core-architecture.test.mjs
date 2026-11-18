@@ -60,10 +60,15 @@ test('DM media notes include private one-view storage and recording controls', (
   assert.match(composer, /dm-waveform/);
   assert.match(composer, /video-note-playback/);
   assert.match(composer, /viewOnce/);
+  assert.match(composer, /recordingStarting/);
+  assert.match(composer, /cancelRecording\(\)/);
+  assert.match(composer, /dm-composer-actions/);
   assert.match(media, /mw-dm-ephemeral/);
   assert.match(media, /consume-once/);
   assert.match(direct, /sendDirectMedia/);
+  assert.match(direct, /this\.composer\.cancelRecording\(\)/);
   assert.match(group, /sendGroupMedia/);
+  assert.match(group, /this\.composer\.cancelRecording\(\)/);
   assert.match(api, /mw_message_send_once/);
   assert.match(api, /mw_message_complete_once/);
 });

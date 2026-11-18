@@ -35,6 +35,8 @@ export class ChatComposer {
     this.objectUrl = '';
     this.viewOnce = false;
     this.recording = null;
+    this.recordingStarting = false;
+    this.captureGeneration = 0;
     this.input = h('textarea', { class: 'field msg-input', rows: '1', maxlength: '4000', placeholder: t('typeMessage'), 'aria-label': t('typeMessage') });
     this.picker = fileInput();
     this.attachment = this.#tool(t('attachMedia'), '＋', () => this.picker.click());
@@ -49,7 +51,8 @@ export class ChatComposer {
     this.preview = h('div', { class: 'chat-media-preview', hidden: true });
     this.form = h('form', { class: 'msg-form dm-composer', onsubmit: event => { event.preventDefault(); this.#submit(); } },
       this.preview,
-      h('div', { class: 'dm-composer-row' }, this.attachment, this.input, this.once, this.voice, this.video, this.send),
+      h('div', { class: 'dm-composer-row' }, this.attachment, this.input,
+        h('div', { class: 'dm-composer-actions' }, this.once, this.voice, this.video), this.send),
       this.picker);
     this.picker.addEventListener('change', () => {
       const file = this.picker.files?.[0];
@@ -112,6 +115,14 @@ export class ChatComposer {
     this.input.hidden = false;
   }
 
+  cancelRecording() {
+    this.captureGeneration++;
+    this.recordingStarting = false;
+    if (!this.recording) return;
+    this.recording.cancelled = true;
+    if (this.recording.recorder.state !== 'inactive') this.recording.recorder.stop();
+  }
+
   async #submit() {
     if (this.pendingMedia) {
       const media = this.pendingMedia;
@@ -139,18 +150,29 @@ export class ChatComposer {
 
   async #record(kind) {
     if (this.recording) {
-      if (this.recording.kind === kind) this.recording.recorder.stop();
+      if (this.recording.kind === kind && this.recording.recorder.state !== 'inactive') this.recording.recorder.stop();
       return;
     }
+    if (this.recordingStarting) return;
+    const generation = ++this.captureGeneration;
+    this.recordingStarting = true;
+    let stream;
+    let context;
+    let sampleTimer;
+    let clock;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia(kind === 'audio'
+      stream = await navigator.mediaDevices.getUserMedia(kind === 'audio'
         ? { audio: true }
         : { audio: true, video: { facingMode: 'user', width: { ideal: 720 }, height: { ideal: 720 } } });
+      if (generation !== this.captureGeneration) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
       const mimeType = recordingType(kind);
       const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
       const chunks = [];
       const peaks = [];
-      let context, analyser, source, sampleTimer;
+      let analyser, source;
       if (kind === 'audio' && (window.AudioContext || window.webkitAudioContext)) {
         try {
           context = new (window.AudioContext || window.webkitAudioContext)();
@@ -174,7 +196,9 @@ export class ChatComposer {
         : waveform(peaks, 'is-recording');
       if (kind === 'video') preview.srcObject = stream;
       const time = h('span', { class: 'chat-record-time' }, '00:00');
-      const stop = this.#tool(t('stopRecording'), '■', () => recorder.stop());
+      const stop = this.#tool(t('stopRecording'), '■', () => {
+        if (recorder.state !== 'inactive') recorder.stop();
+      });
       const cancel = this.#tool(t('cancel'), '×', () => {
         this.recording.cancelled = true;
         if (recorder.state !== 'inactive') recorder.stop();
@@ -183,19 +207,34 @@ export class ChatComposer {
       this.preview.replaceChildren(panel);
       this.preview.hidden = false;
       this.input.hidden = true;
-      this.recording = { kind, recorder, wave: preview, cancelled: false };
+      const capture = { kind, recorder, wave: preview, cancelled: false };
+      this.recording = capture;
+      this.recordingStarting = false;
+      this.voice.classList.toggle('is-recording', kind === 'audio');
+      this.video.classList.toggle('is-recording', kind === 'video');
+      this.voice.setAttribute('aria-pressed', String(kind === 'audio'));
+      this.video.setAttribute('aria-pressed', String(kind === 'video'));
+      this.voice.setAttribute('aria-label', kind === 'audio' ? t('stopRecording') : t('recordVoiceNote'));
+      this.video.setAttribute('aria-label', kind === 'video' ? t('stopRecording') : t('recordVideoNote'));
+      this.voice.title = kind === 'audio' ? t('stopRecording') : t('recordVoiceNote');
+      this.video.title = kind === 'video' ? t('stopRecording') : t('recordVideoNote');
       const started = Date.now();
-      const clock = setInterval(() => {
+      clock = setInterval(() => {
         const seconds = Math.floor((Date.now() - started) / 1000);
         time.textContent = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
         if (seconds >= (kind === 'audio' ? 180 : 60) && recorder.state !== 'inactive') recorder.stop();
       }, 250);
       recorder.addEventListener('dataavailable', event => { if (event.data?.size) chunks.push(event.data); });
       recorder.addEventListener('error', () => {
+        capture.failed = true;
         clearInterval(clock); clearInterval(sampleTimer); stream.getTracks().forEach(track => track.stop());
         context?.close().catch(() => {});
-        this.recording = null;
-        this.#clearPreview();
+        if (this.recording === capture) {
+          this.recording = null;
+          this.#resetRecordingControls();
+          this.#clearPreview();
+        }
+        if (capture.cancelled) return;
         const error = new Error(t('recordingFailed'));
         if (this.onCaptureError) this.onCaptureError(error);
         else toast(error.message);
@@ -204,19 +243,44 @@ export class ChatComposer {
         clearInterval(clock); clearInterval(sampleTimer);
         stream.getTracks().forEach(track => track.stop());
         context?.close().catch(() => {});
-        const cancelled = this.recording?.cancelled;
-        this.recording = null;
-        if (cancelled) { this.#clearPreview(); return; }
+        const isCurrent = this.recording === capture;
+        if (isCurrent) {
+          this.recording = null;
+          this.#resetRecordingControls();
+        }
+        if (capture.cancelled || capture.failed) {
+          if (isCurrent) this.#clearPreview();
+          return;
+        }
         const blob = new Blob(chunks, { type: recorder.mimeType || (kind === 'audio' ? 'audio/webm' : 'video/webm') });
         if (!blob.size) { this.#clearPreview(); toast(t('recordingFailed')); return; }
         this.#queue(mediaFile(blob, kind), kind === 'audio' ? 'voice_note' : 'video_note', peaks);
       }, { once: true });
       recorder.start(250);
     } catch (error) {
+      this.recordingStarting = false;
+      clearInterval(clock);
+      clearInterval(sampleTimer);
+      stream?.getTracks().forEach(track => track.stop());
+      context?.close().catch(() => {});
+      if (generation !== this.captureGeneration) return;
+      this.recording = null;
+      this.#resetRecordingControls();
       this.#clearPreview();
       if (this.onCaptureError) this.onCaptureError(error);
       else toast(error?.message || t('recordingFailed'));
     }
+  }
+
+  #resetRecordingControls() {
+    this.voice.classList.remove('is-recording');
+    this.video.classList.remove('is-recording');
+    this.voice.setAttribute('aria-pressed', 'false');
+    this.video.setAttribute('aria-pressed', 'false');
+    this.voice.setAttribute('aria-label', t('recordVoiceNote'));
+    this.video.setAttribute('aria-label', t('recordVideoNote'));
+    this.voice.title = t('recordVoiceNote');
+    this.video.title = t('recordVideoNote');
   }
 }
 
