@@ -19,6 +19,12 @@ import { h, icon, count, toast, paintAvatar, brandMark, avatar } from './dom.js'
 const JOIN_DELAY = 200;
 const MAX_COMMENTS = 40;
 const MAX_HEARTS = 24;
+const roomMembers = status => Array.isArray(status?.members)
+  ? status.members.filter(member => member && typeof member === 'object' && member.userId)
+  : [];
+const displayName = name => typeof name === 'string' && name.trim() && !/^(null|undefined)$/i.test(name.trim())
+  ? name
+  : 'MilkyWay';
 
 /** Builds the chrome shared by viewer slides and the host stage. */
 function liveChrome({ host = false } = {}) {
@@ -95,8 +101,9 @@ function paintLive(slide, live) {
   slide._live = live;
   paintAvatar(r.avatarNode, live.host, 34);
   paintAvatar(r.cover.querySelector('.live-cover-avatar'), live.host, 96);
-  r.name.textContent = live.host.name;
-  r.hostLabel.textContent = live.host.name;
+  const hostName = displayName(live.host.name);
+  r.name.textContent = hostName;
+  r.hostLabel.textContent = hostName;
   r.cover.querySelector('.live-cover-title').textContent = live.title || '';
   r.follow.hidden = live.host.id === auth.userId || profiles.isFollowing(live.host.id);
   r.viewers.textContent = '–';
@@ -153,7 +160,7 @@ function guestTile(slide, userId, name = '') {
       : null;
     tile = h('div', { class: 'live-guest', 'data-uid': cssId(userId), 'data-act': 'guest' },
       h('span', { class: 'avatar live-guest-avatar', style: '--s:44px' }),
-      h('span', { class: 'live-guest-name' }, name || 'MilkyWay'),
+      h('span', { class: 'live-guest-name' }, displayName(name)),
       h('span', { class: 'live-guest-mic', html: icon.muted, hidden: true }),
       hostTools);
     paintAvatar(tile.querySelector('.avatar'), { name }, 44);
@@ -233,19 +240,20 @@ function applyRoom(slide, session, status) {
     slide._lastSelf = { state: self.state, hostMuted: !!self.hostMuted };
     paintMedia(slide, session.media);
   } else {
-    const waiting = (status.members || []).filter(member => member.state === 'pending' && !member.invited).length;
+    const members = roomMembers(status);
+    const waiting = members.filter(member => member.state === 'pending' && !member.invited).length;
     r.guestsBadge.hidden = !waiting;
     r.guestsBadge.textContent = String(waiting);
-    renderRequests(slide, status);
+    renderRequests(slide, session, status);
   }
 
   // Guest boxes
-  const speakers = (status.members || []).filter(member => member.state === 'speaker');
+  const speakers = roomMembers(status).filter(member => member.state === 'speaker');
   const guestSeats = host && settings.showGuestSlots ? Math.max(0, Math.min(8, Number(settings.layout || 1) - 1)) : 0;
   const orderedTiles = [];
   for (const member of speakers) {
     const tile = guestTile(slide, member.userId, member.name);
-    tile.querySelector('.live-guest-name').textContent = member.userId === auth.userId ? t('youAreOnStage') : member.name || 'MilkyWay';
+    tile.querySelector('.live-guest-name').textContent = member.userId === auth.userId ? t('youAreOnStage') : displayName(member.name);
     paintAvatar(tile.querySelector('.avatar'), member, 44);
     tile.querySelector('.live-guest-mic').hidden = !member.hostMuted;
     const muteBtn = tile.querySelector('[data-act="guest-mute"]');
@@ -318,29 +326,50 @@ function paintMedia(slide, media) {
 }
 
 const REQUESTS_SHOWN = 3;
+function handleRequestAction(slide, session, action, userId, button) {
+  const busy = slide._approving ||= new Set();
+  if (!userId || busy.has(userId)) return;
+  busy.add(userId);
+  button.closest('.live-request')?.querySelectorAll('button').forEach(node => { node.disabled = true; });
+  session.control(action, { target: userId })
+    .then(() => { if (action === 'approve') toast(t('guestApproved')); })
+    .catch(error => toast(error?.message || t('liveUnavailable')))
+    .finally(() => { busy.delete(userId); if (session.status) applyRoom(slide, session, session.status); });
+}
+
 /** Host: the waiting list on screen. Each row has Approve (promotes the viewer to publisher) and Reject. */
-function renderRequests(slide, status) {
+function renderRequests(slide, session, status) {
   const r = slide._refs;
-  const settings = status.settings || {};
-  const pending = (status.members || []).filter(member => member.state === 'pending' && !member.invited && !member.blocked);
+  const settings = status?.settings || {};
+  const members = roomMembers(status);
+  const pending = members.filter(member => member.state === 'pending' && !member.invited && !member.blocked);
   r.requests.hidden = !pending.length;
   if (!pending.length) { r.requests.replaceChildren(); return; }
   const busy = slide._approving || new Set();
   const seats = Math.max(1, (settings.layout || 9) - 1);
-  const onStage = (status.members || []).filter(member => member.state === 'speaker').length;
+  const onStage = members.filter(member => member.state === 'speaker').length;
   const full = onStage >= seats;
   r.requests.replaceChildren(
     h('div', { class: 'live-requests-head' },
       h('span', { html: icon.guests, 'aria-hidden': 'true' }),
       h('b', {}, `${t('requestsToJoin')} (${pending.length})`),
       h('small', {}, `${onStage}/${seats}`)),
-    ...pending.slice(0, REQUESTS_SHOWN).map(member => h('div', { class: 'live-request', 'data-uid': cssId(member.userId) },
-      avatar(member, 30),
-      h('span', { class: 'live-request-name' }, member.name || 'MilkyWay'),
-      h('button', { class: 'live-req-btn approve', type: 'button', 'data-act': 'approve-request', 'data-uid': member.userId, disabled: busy.has(member.userId),
-        title: full ? t('seatsFull') : t('approve'), 'aria-label': `${t('approve')} ${member.name || ''}` }, t('approve')),
-      h('button', { class: 'live-req-btn reject', type: 'button', 'data-act': 'reject-request', 'data-uid': member.userId, disabled: busy.has(member.userId),
-        'aria-label': `${t('reject')} ${member.name || ''}`, html: icon.close }))),
+    ...pending.slice(0, REQUESTS_SHOWN).map(member => {
+      const approve = h('button', { class: 'live-req-btn approve', type: 'button', disabled: busy.has(member.userId),
+        title: full ? t('seatsFull') : t('approve'), 'aria-label': `${t('approve')} ${displayName(member.name)}` }, t('approve'));
+      approve.addEventListener('click', event => {
+        event.stopPropagation();
+        handleRequestAction(slide, session, 'approve', member.userId, approve);
+      });
+      const reject = h('button', { class: 'live-req-btn reject', type: 'button', disabled: busy.has(member.userId),
+        'aria-label': `${t('reject')} ${displayName(member.name)}`, html: icon.close });
+      reject.addEventListener('click', event => {
+        event.stopPropagation();
+        handleRequestAction(slide, session, 'reject', member.userId, reject);
+      });
+      return h('div', { class: 'live-request', 'data-uid': cssId(member.userId) },
+        avatar(member, 30), h('span', { class: 'live-request-name' }, displayName(member.name)), approve, reject);
+    }),
     pending.length > REQUESTS_SHOWN
       ? h('button', { class: 'live-requests-more', type: 'button', 'data-act': 'guests' }, `+${pending.length - REQUESTS_SHOWN} · ${t('requests')}`)
       : null,
@@ -738,17 +767,6 @@ export class LiveView {
       else if (act === 'retry') session.reconnect().catch(error => { toast(error?.message || t('liveUnavailable')); showRetry(stage, t('liveUnavailable')); });
       else if (act === 'share') openShare({ title: live.title || 'MilkyWay LIVE', url: `${location.origin}${location.pathname.replace(/[^/]*$/, '')}#live=${encodeURIComponent(live.room)}` });
       else if (act === 'guests') controls.openGuests();
-      else if (act === 'approve-request' || act === 'reject-request') {
-        const userId = button.dataset.uid;
-        stage._approving ||= new Set();
-        if (!userId || stage._approving.has(userId)) return;
-        stage._approving.add(userId);
-        button.closest('.live-request')?.querySelectorAll('button').forEach(node => { node.disabled = true; });
-        session.control(act === 'approve-request' ? 'approve' : 'reject', { target: userId })
-          .then(() => { if (act === 'approve-request') toast(t('guestApproved')); })
-          .catch(error => toast(error?.message || t('liveUnavailable')))
-          .finally(() => { stage._approving.delete(userId); if (session.status) applyRoom(stage, session, session.status); });
-      }
       else if (act === 'guest-mute' || act === 'guest-remove' || act === 'guest-kick') {
         event.stopPropagation();
         const userId = button.dataset.uid;

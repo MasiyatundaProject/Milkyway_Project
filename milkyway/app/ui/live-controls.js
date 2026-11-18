@@ -10,6 +10,12 @@ import { h, icon, toast, avatar } from './dom.js';
 
 const SLOW_STEPS = [0, 3, 10, 30, 60];
 const MAX_SEATS = 8;
+const roomMembers = status => Array.isArray(status?.members)
+  ? status.members.filter(member => member && typeof member === 'object' && member.userId)
+  : [];
+const displayName = name => typeof name === 'string' && name.trim() && !/^(null|undefined)$/i.test(name.trim())
+  ? name
+  : 'MilkyWay';
 
 /** Runs a session action with a toast on failure; returns true on success. */
 async function run(session, action, extra = {}, okMessage = '') {
@@ -40,12 +46,16 @@ function confirmButton(label, onConfirm, className = 'pill-btn danger') {
   return button;
 }
 
-const actionBtn = (label, onclick, className = 'pill-btn') => h('button', { class: className, type: 'button', onclick }, label);
+const actionBtn = (label, onClick, className = 'pill-btn') => {
+  const button = h('button', { class: className, type: 'button' }, label);
+  button.addEventListener('click', onClick);
+  return button;
+};
 
 function personRow(person, ...actions) {
   return h('div', { class: 'lc-person' },
     avatar(person, 36),
-    h('div', { class: 'lc-person-name' }, h('b', {}, person.name || 'MilkyWay'),
+    h('div', { class: 'lc-person-name' }, h('b', {}, displayName(person.name)),
       person.hostMuted ? h('small', {}, `🔇 ${t('muteMic')}`) : person.commentMuted ? h('small', {}, `💬 ${t('mutedCommenters')}`) : null),
     h('div', { class: 'lc-person-actions' }, ...actions.filter(Boolean)));
 }
@@ -92,7 +102,7 @@ export class HostControls {
       session.on('stage-request', () => this.#rerender()),
       session.on('declined', userId => {
         const person = this.#people().find(entry => entry.userId === userId);
-        toast(`${person?.name || 'MilkyWay'} ${t('declined')}`);
+        toast(`${displayName(person?.name)} ${t('declined')}`);
       }),
     ];
   }
@@ -121,11 +131,11 @@ export class HostControls {
 
   // A short notice when someone new asks to join, so the host never misses a request.
   #announceRequests(status) {
-    const pending = (status?.members || []).filter(member => member.state === 'pending' && !member.invited);
+    const pending = roomMembers(status).filter(member => member.state === 'pending' && !member.invited);
     const ids = new Set(pending.map(member => member.userId));
     if (this.knownRequests && !this.guestSheet.isOpen) {
       const fresh = pending.filter(member => !this.knownRequests.has(member.userId));
-      if (fresh.length) toast(fresh.length === 1 ? `${fresh[0].name || 'MilkyWay'} ${t('wantsToJoin')}` : `${fresh.length} ${t('newRequests')}`);
+      if (fresh.length) toast(fresh.length === 1 ? `${displayName(fresh[0].name)} ${t('wantsToJoin')}` : `${fresh.length} ${t('newRequests')}`);
     }
     this.knownRequests = ids;
   }
@@ -143,7 +153,7 @@ export class HostControls {
   // Members known to the server, merged with who is connected to the media room right now.
   #people() {
     const status = this.session.status;
-    const byId = new Map((status?.members || []).map(member => [member.userId, { ...member }]));
+    const byId = new Map(roomMembers(status).map(member => [member.userId, { ...member }]));
     for (const participant of this.session.audience()) {
       const known = byId.get(participant.userId);
       if (known) known.online = true;
@@ -177,13 +187,23 @@ export class HostControls {
     const seatGrid = h('div', { class: 'lc-seats', role: 'list' }, ...Array.from({ length: MAX_SEATS }, (_, i) => {
       const n = i + 1;
       const person = stage[i];
-      if (person) return h('button', { class: 'lc-seat taken', type: 'button', role: 'listitem', onclick: () => this.openPerson(person) },
-        h('span', { class: 'lc-seat-n' }, String(n)), avatar(person, 36), h('small', {}, person.name || 'MilkyWay'),
-        person.hostMuted ? h('span', { class: 'lc-seat-mic', html: icon.muted }) : null);
-      if (n > seats) return h('button', { class: 'lc-seat locked', type: 'button', role: 'listitem', 'aria-label': `${t('openSeat')} ${n}`, onclick: () => setSeats(n) },
-        h('span', { class: 'lc-seat-n' }, String(n)), h('span', { class: 'lc-seat-icon' }, '🔒'), h('small', {}, t('closedSeat')));
-      return h('button', { class: 'lc-seat empty', type: 'button', role: 'listitem', onclick: () => inviteSection.scrollIntoView({ behavior: 'smooth', block: 'start' }) },
+      if (person) {
+        const seat = h('button', { class: 'lc-seat taken', type: 'button', role: 'listitem' },
+          h('span', { class: 'lc-seat-n' }, String(n)), avatar(person, 36), h('small', {}, displayName(person.name)),
+          person.hostMuted ? h('span', { class: 'lc-seat-mic', html: icon.muted }) : null);
+        seat.addEventListener('click', () => this.openPerson(person));
+        return seat;
+      }
+      if (n > seats) {
+        const seat = h('button', { class: 'lc-seat locked', type: 'button', role: 'listitem', 'aria-label': `${t('openSeat')} ${n}` },
+          h('span', { class: 'lc-seat-n' }, String(n)), h('span', { class: 'lc-seat-icon' }, '🔒'), h('small', {}, t('closedSeat')));
+        seat.addEventListener('click', () => setSeats(n));
+        return seat;
+      }
+      const seat = h('button', { class: 'lc-seat empty', type: 'button', role: 'listitem' },
         h('span', { class: 'lc-seat-n' }, String(n)), h('span', { class: 'lc-seat-icon' }, '+'), h('small', {}, t('emptySeat')));
+      seat.addEventListener('click', () => inviteSection.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+      return seat;
     }));
 
     this.guestSheet.body.replaceChildren(

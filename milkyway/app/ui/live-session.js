@@ -42,6 +42,9 @@ const HOST_GRACE_MS = 25_000;
 const tokenCache = new Map(); // room → { payload, at }
 const tokenRequests = new Map();
 const endedRooms = new Set();
+const roomMembers = status => Array.isArray(status?.members)
+  ? status.members.filter(member => member && typeof member === 'object' && member.userId)
+  : [];
 // Host decision → the signal the affected viewer receives (they re-read the room at once).
 const HOST_SIGNALS = { approve: 'stage-approve', reject: 'stage-reject', remove: 'stage-remove', kick: 'stage-remove', mute: 'stage-mute', 'allow-mic': 'stage-unmute', invite: 'stage-invite', 'cancel-invite': 'stage-invite' };
 
@@ -621,7 +624,7 @@ export class LiveSession extends Emitter {
   // The host's app approves guests who accepted an invitation (publish rights can only be granted by the host).
   #autoApprove(status) {
     if (!this.host) return;
-    for (const member of status.members || []) {
+    for (const member of roomMembers(status)) {
       if (member.state !== 'pending' || !member.invited || this.approving.has(member.userId)) continue;
       this.approving.add(member.userId);
       this.control('approve', { target: member.userId }, { quiet: true })
@@ -809,7 +812,7 @@ export class LiveSession extends Emitter {
       if (!this.host || event.uid === this.live.host.id) return;
       try {
         const status = await api(config.api.liveRoom, { method: 'POST', body: { room: this.live.room, action: 'status' }, timeout: 8000 });
-        if (!status?.members?.some(member => member.userId === event.uid && member.invited)) return;
+        if (!roomMembers(status).some(member => member.userId === event.uid && member.invited)) return;
         await this.control('cancel-invite', { target: event.uid }, { quiet: true });
         this.emit('declined', event.uid);
       } catch { /* the status poll will reflect the persisted invitation */ }
@@ -860,8 +863,8 @@ export class LiveSession extends Emitter {
       const before = this.status;
       this.status = status;
       if (this.host) {
-        const previouslyPending = new Set((before?.members || []).filter(member => member.state === 'pending').map(member => member.userId));
-        for (const member of status.members || []) {
+        const previouslyPending = new Set(roomMembers(before).filter(member => member.state === 'pending').map(member => member.userId));
+        for (const member of roomMembers(status)) {
           if (member.state === 'pending' && !previouslyPending.has(member.userId)) {
             this.emit('stage-request', { userId: member.userId, name: member.name || '' });
           }
