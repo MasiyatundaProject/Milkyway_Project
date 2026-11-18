@@ -335,7 +335,9 @@ test('DM call connection validates token endpoints and offers an in-call retry o
   assert.match(callView, /assertRoomAccess/);
   assert.match(callView, /isUsageLimitError/);
   assert.match(callView, /LiveKit usage limit reached/);
-  assert.match(callView, /if \(isUsageLimitError\(error\)\) throw error/);
+  assert.match(callView, /if \(this\.closed \|\| \(!isUsageLimitError\(error\)/);
+  assert.doesNotMatch(callView, /if \(isUsageLimitError\(error\)\) throw error/);
+  assert.match(callView, /const access = await callApi\('token', \{ id: callId, name \}\)[\s\S]*?const access = await directCallToken\(roomName, name\)/);
   assert.match(callView, /this\.retryBtn\.hidden = false/);
   assert.doesNotMatch(callView, /this\.hangUp\('disconnected'\)/);
   assert.match(callView, /callServiceLimited/);
@@ -357,12 +359,15 @@ test('profile post queries fall back across optional schema columns and normaliz
 
 test('DM room cleanup RPC is installed and token issuance avoids cleanup management calls', () => {
   const cleanupMigration = readFileSync(new URL('../supabase/migrations/20261127_milkyway_room_cleanup_enqueue_schema_cache.sql', import.meta.url), 'utf8');
+  const cleanupRepair = readFileSync(new URL('../supabase/migrations/20261128_milkyway_room_cleanup_enqueue_repair.sql', import.meta.url), 'utf8');
   const repair = readFileSync(new URL('../supabase/milkyway-schema-repair.sql', import.meta.url), 'utf8');
   const callApi = readFileSync(new URL('../api/milkyway-call.js', import.meta.url), 'utf8');
   const livekit = readFileSync(new URL('../api/_lib/livekit.js', import.meta.url), 'utf8');
   assert.match(cleanupMigration, /create or replace function public\.mw_room_cleanup_enqueue\(p_room_name text\)/i);
   assert.match(cleanupMigration, /grant execute on function public\.mw_room_cleanup_enqueue\(text\) to authenticated/i);
   assert.match(cleanupMigration, /notify pgrst, 'reload schema'/i);
+  assert.match(cleanupRepair, /create or replace function public\.mw_room_cleanup_enqueue\(p_room_name text\)/i);
+  assert.match(cleanupRepair, /notify pgrst, 'reload schema'/i);
   assert.match(repair, /create or replace function public\.mw_room_cleanup_enqueue\(p_room_name text\)/i);
   assert.doesNotMatch(callApi, /retryRoomCleanups/);
   assert.match(callApi, /closeRoom\(ctx, oldRoom, \{ immediate: false \}\)/);

@@ -46,7 +46,6 @@ async function callAccessToken(roomName, callId, name) {
     return assertRoomAccess(access, roomName);
   } catch (error) {
     gatewayError = error;
-    if (isUsageLimitError(error)) throw error;
     if ([401, 403, 404, 409].includes(error?.status)) throw error;
   }
   try {
@@ -180,8 +179,8 @@ class CallScreen {
         });
       try { await room.connect(access.serverUrl, access.token, { autoSubscribe: true }); }
       catch (error) {
-        // A gateway can return a token signed for a different LiveKit project; try the configured Supabase issuer.
-        if (this.closed || !/api key|signal connection|unauthori[sz]ed|\b401\b/i.test(String(error?.message || ''))) throw error;
+        // A gateway can have stale credentials or hit a route limit; try the separately configured Supabase issuer.
+        if (this.closed || (!isUsageLimitError(error) && !/api key|signal connection|unauthori[sz]ed|\b401\b/i.test(String(error?.message || '')))) throw error;
         const retry = await directCallToken(roomName, auth.name);
         if (this.closed) return;
         assertRoomAccess(retry, roomName, access.serverUrl);
