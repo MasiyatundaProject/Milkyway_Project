@@ -35,6 +35,10 @@ const giftTray = lazy(() => import('./ui/gift-tray.js').then(m => new m.GiftTray
 const inboxView = lazy(() => import('./ui/inbox-view.js').then(m => new m.InboxView()));
 const callView = lazy(() => import('./ui/call-view.js').then(m => m.calls));
 const novaMenu = lazy(() => import('./ui/settings-view.js').then(m => new m.NovaMenu({
+  openProfilePhoto: file => {
+    if (!requireLogin()) return;
+    profileView().then(view => view.openForPhoto(file)).catch(error => toast(error?.message || t('photoUploadFailed')));
+  },
   openStudioPost: post => {
     if (!post) { openCreate(); return; }
     postViewer().then(viewer => viewer.open([post], 0, { own: true }));

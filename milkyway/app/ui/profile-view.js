@@ -146,15 +146,21 @@ export class ProfileView {
   }
 
   /** person: { id, name, username, avatar } or null for the signed-in user. */
-  open(person = null) {
+  open(person = null, { photo = null } = {}) {
     const id = String(person?.id || auth.userId || '');
     if (!id) return;
+    this.pendingPhoto = photo;
     this.id = id;
     this.own = id === auth.userId;
     this.sheet.title = this.own ? t('me') : (person?.name || profiles.peek(id)?.name || t('profile'));
     this.#render({ profile: person || profiles.peek(id) || { id, name: this.own ? auth.name : '' }, loading: true });
     this.sheet.open();
     this.#load(id);
+  }
+
+  openForPhoto(file) {
+    if (!auth.userId || !file) return;
+    this.open(null, { photo: file });
   }
 
   async #load(id) {
@@ -177,13 +183,19 @@ export class ProfileView {
       const { data: pin } = await quiet(sb.from('mw_creator_pins').select('post_id').eq('creator_id', id).maybeSingle());
       const profilePosts = Array.isArray(posts.data) ? posts.data : [];
       if (pin?.post_id) profilePosts.sort((a, b) => Number(b.id === pin.post_id) - Number(a.id === pin.post_id));
-      this.#render({
+      const renderData = {
         profile: person,
         followers: followers.count || 0,
         following: following.count || 0,
         posts: profilePosts,
         postsError: posts.error?.message || '',
-      });
+      };
+      this.#render(renderData);
+      if (this.own && this.pendingPhoto) {
+        const selected = this.pendingPhoto;
+        this.pendingPhoto = null;
+        this.#edit(person, { photo: selected });
+      }
       this.#loadBusiness(person, token);
     } catch {
       if (token === this.token) this.#render({ profile: profiles.peek(id) || { id }, error: true });
@@ -296,10 +308,16 @@ export class ProfileView {
       menu: this.own ? () => this.#postMenu(post) : null,
     })));
 
+    const profileAvatar = avatar(profile, 84);
+    const avatarControl = this.own
+      ? h('button', { class: 'profile-avatar-shortcut', type: 'button', 'aria-label': t('changeProfilePhoto'), onclick: () => this.#edit(profile, { openPicker: true }) },
+        h('span', { class: `presence-avatar${presence.isOnline(profile.id) || presence.visible ? ' online' : ''}`, 'data-presence': profile.id },
+          profileAvatar, h('i', { class: 'presence-dot', 'aria-hidden': 'true' })))
+      : h('span', { class: `presence-avatar${presence.isOnline(profile.id) ? ' online' : ''}`, 'data-presence': profile.id },
+        profileAvatar, h('i', { class: 'presence-dot', 'aria-hidden': 'true' }));
     this.content.replaceChildren(
       h('div', { class: 'profile-head' },
-        h('span', { class: `presence-avatar${presence.isOnline(profile.id) || (this.own && presence.visible) ? ' online' : ''}`, 'data-presence': this.own ? null : profile.id },
-          avatar(profile, 84), h('i', { class: 'presence-dot', 'aria-hidden': 'true' })),
+        avatarControl,
         h('div', { class: 'profile-names' },
           h('b', {}, profile.name || ''),
           profile.username ? h('span', { class: 'muted' }, `@${profile.username}`) : null,
@@ -309,7 +327,7 @@ export class ProfileView {
       stats, actionsRow, grid);
   }
 
-  #edit(profile) {
+  #edit(profile, { openPicker = false, photo: initialPhoto = null } = {}) {
     this.mode = 'edit';
     const name = h('input', { class: 'field', maxlength: '60', value: profile.name || '', placeholder: t('displayName'), required: true });
     const username = h('input', { class: 'field', maxlength: '30', value: profile.username || '', placeholder: t('username'), autocapitalize: 'off', spellcheck: 'false' });
@@ -329,8 +347,7 @@ export class ProfileView {
       previewUrl = '';
       photoPreview.replaceChildren(avatar(profile, 72));
     };
-    photoInput.addEventListener('change', async event => {
-      const file = event.currentTarget.files?.[0] || null;
+    const selectPhoto = async file => {
       if (!file) return;
       const version = ++selectionVersion;
       selectedPhoto = null;
@@ -354,7 +371,8 @@ export class ProfileView {
           choosePhoto.disabled = false;
         }
       }
-    });
+    };
+    photoInput.addEventListener('change', event => { void selectPhoto(event.currentTarget.files?.[0] || null); });
     const submit = h('button', { class: 'pill-btn hot wide', type: 'submit' }, t('save'));
     this.content.replaceChildren(h('form', { class: 'stack', onsubmit: async event => {
       event.preventDefault();
@@ -424,6 +442,10 @@ export class ProfileView {
       photoInput),
     submit, message,
     h('button', { class: 'link center', type: 'button', onclick: () => { selectionVersion++; selectedPhoto = null; clearPreview(); this.#load(this.id); } }, t('cancel'))));
+    if (initialPhoto) void selectPhoto(initialPhoto);
+    else if (openPicker) {
+      try { openFilePicker(photoInput); } catch (error) { message.textContent = error.message || t('photoUnsupported'); }
+    }
   }
 
 }

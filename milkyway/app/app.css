@@ -583,6 +583,8 @@ html[data-low-end] .create-orb, html[data-low-end] .gift-card, html[data-low-end
 /* ---- Profile + composer ----------------------------------------------------------------------------------- */
 .profile { display: grid; gap: 12px; }
 .profile-head { display: flex; align-items: center; gap: 14px; }
+.profile-avatar-shortcut, .nova-profile-photo-button { display: inline-flex; align-items: center; justify-content: center; flex: none; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; }
+.profile-avatar-shortcut:focus-visible, .nova-profile-photo-button:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 3px; }
 .profile-names { display: grid; gap: 2px; min-width: 0; }
 .profile-names b { font-size: 18px; overflow-wrap: anywhere; }
 .profile-bio { margin: 0; white-space: pre-line; overflow-wrap: anywhere; }

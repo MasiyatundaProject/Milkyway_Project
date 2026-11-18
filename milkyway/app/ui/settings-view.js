@@ -4,6 +4,7 @@ import { config } from '../config.js';
 import { t, lang, languages, setLanguage } from '../core/i18n.js';
 import { api, auth, supabase } from '../core/net.js';
 import { bus } from '../core/events.js';
+import { openFilePicker } from '../core/media-files.js';
 import { presence } from '../data/presence.js';
 import { catalog, wallet } from '../data/gifts.js';
 import { Sheet } from './sheet.js';
@@ -169,11 +170,16 @@ async function renderPlayCoinPackages(container, balance, note) {
 }
 
 export class NovaMenu {
-  constructor({ onSignedOut, openStudioPost } = {}) {
-    this.hooks = { onSignedOut, openStudioPost };
+  constructor({ onSignedOut, openStudioPost, openProfilePhoto } = {}) {
+    this.hooks = { onSignedOut, openStudioPost, openProfilePhoto };
     this.sheet = new Sheet({ title: t('menu'), className: 'nova-sheet', onClose: () => this.studioView?.stop() });
     this.content = h('div', { class: 'nova-menu' });
     this.sheet.body.append(this.content);
+    this.photoShortcutInput = h('input', { type: 'file', accept: 'image/*,.heic,.heif', hidden: true, onchange: () => {
+      const file = this.photoShortcutInput.files?.[0] || null;
+      this.photoShortcutInput.value = '';
+      if (file) this.hooks.openProfilePhoto?.(file);
+    } });
     presence.subscribe(() => this.#paintPresence());
     bus.on('profile', profile => {
       if (String(profile?.id) !== String(auth.userId)) return;
@@ -214,6 +220,11 @@ export class NovaMenu {
     if (this.activeLine) this.activeLine.textContent = `${count(presence.count)} ${t('activeUsers')}`;
   }
 
+  #pickProfilePhoto() {
+    try { openFilePicker(this.photoShortcutInput); }
+    catch (error) { toast(error?.message || t('mediaPickerUnavailable')); }
+  }
+
   // ---- Main menu -----------------------------------------------------------------------------------------
   #home() {
     this.studioView?.stop();
@@ -234,9 +245,11 @@ export class NovaMenu {
     if (adminSlot) ownerVerified();
     this.content.replaceChildren(
       h('div', { class: 'nova-card' },
-        h('span', { class: 'presence-avatar online-self' }, avatar(person, 56), h('i', { class: 'presence-dot', 'aria-hidden': 'true' })),
+        h('button', { class: 'nova-profile-photo-button', type: 'button', 'aria-label': t('changeProfilePhoto'), onclick: () => this.#pickProfilePhoto() },
+          h('span', { class: 'presence-avatar online-self' }, avatar(person, 56), h('i', { class: 'presence-dot', 'aria-hidden': 'true' }))),
         h('div', { class: 'nova-card-text' }, h('b', {}, person.name), h('small', { class: 'muted' }, auth.user?.email || ''), this.onlineBadge),
         h('button', { class: 'nova-active', type: 'button', title: t('activeNow'), onclick: () => this.#online() }, h('i', { class: 'presence-dot live', 'aria-hidden': 'true' }), this.activeLine)),
+      this.photoShortcutInput,
       adminSlot,
       h('p', { class: 'nova-section' }, t('settings')),
       row('🔒', t('privacy'), { onclick: () => this.#privacy() }),

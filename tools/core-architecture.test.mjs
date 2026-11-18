@@ -362,6 +362,7 @@ test('profile photo upload is scoped, saved to the profile, and refreshed in the
   const profileView = readFileSync(new URL('../milkyway/app/ui/profile-view.js', import.meta.url), 'utf8');
   const profileData = readFileSync(new URL('../milkyway/app/data/profiles.js', import.meta.url), 'utf8');
   const settings = readFileSync(new URL('../milkyway/app/ui/settings-view.js', import.meta.url), 'utf8');
+  const main = readFileSync(new URL('../milkyway/app/main.js', import.meta.url), 'utf8');
   const migration = readFileSync(new URL('../supabase/migrations/20261206_milkyway_profile_avatar_storage.sql', import.meta.url), 'utf8');
   const repair = readFileSync(new URL('../supabase/milkyway-schema-repair.sql', import.meta.url), 'utf8');
   assert.match(profileView, /event\.currentTarget\.files\?\.\[0\] \|\| null/);
@@ -369,8 +370,14 @@ test('profile photo upload is scoped, saved to the profile, and refreshed in the
   assert.match(profileView, /storage\.from\('portfolio'\)\.upload\(uploadedPath, selectedPhoto/);
   assert.match(profileView, /changes\.avatar_url = avatarUrl/);
   assert.match(profileView, /profiles\.update\(updatedProfile\)/);
+  assert.match(profileView, /profile-avatar-shortcut/);
+  assert.match(profileView, /openFilePicker\(photoInput\)/);
+  assert.match(profileView, /openForPhoto\(file\)/);
   assert.match(profileData, /bus\.emit\('profile', profile\)/);
   assert.match(settings, /bus\.on\('profile'/);
+  assert.match(settings, /nova-profile-photo-button/);
+  assert.match(settings, /openFilePicker\(this\.photoShortcutInput\)/);
+  assert.match(main, /openProfilePhoto: file =>[\s\S]*view\.openForPhoto\(file\)/);
   assert.match(migration, /on conflict \(id\) do update set public = true/i);
   assert.match(migration, /\(storage\.foldername\(name\)\)\[2\] = auth\.uid\(\)::text/);
   assert.match(repair, /mw_profile_avatar_insert/);
