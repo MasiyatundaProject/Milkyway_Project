@@ -1,6 +1,7 @@
 // Create photo, slideshow, video or text posts. All slideshow assistance runs locally on the device.
 import { t } from '../core/i18n.js';
 import { auth, supabase } from '../core/net.js';
+import { identifyMediaFile, openFilePicker } from '../core/media-files.js';
 import { createVideoPreview, optimizeImage, optimizeVideo, yieldToBrowser } from '../core/media-optimizer.js';
 import { profiles } from '../data/profiles.js';
 import { feed } from '../data/feed.js';
@@ -31,13 +32,13 @@ function publishError(error, phase) {
   const message = String(error?.message || error || '');
   const code = String(error?.code || '');
   if (/failed to fetch|networkerror|load failed|network request failed|timeout|timed out/i.test(message)) {
-    return `${t('postNetworkFailed')} (${phase}).`;
+    return `${t('postNetworkFailed')} (${phase}): ${message || t('retry')}`;
   }
   if (code === 'PGRST204' || /schema cache|column .*mw_posts|could not find the .*column/i.test(message)) {
     return `${t('postSchemaFailed')} ${message}`;
   }
   if (code === '42501' || /row-level security|not allowed|permission denied/i.test(message)) {
-    return `${t('postPermissionFailed')} (${phase}).`;
+    return `${t('postPermissionFailed')} (${phase}): ${message || t('retry')}`;
   }
   if (code === '23502' || code === '23514' || /not-null constraint|check constraint/i.test(message)) {
     return `${t('postFieldFailed')} ${message}`;
@@ -50,9 +51,14 @@ export class ComposeSheet {
     this.onPublished = onPublished;
     this.sheet = new Sheet({ title: t('newPost'), className: 'compose-sheet', onClose: () => { this.#releaseMedia(); this.#pickAudio(null); } });
     this.files = [];
+    this.mediaSelection = 0;
+    this.audioSelection = 0;
+    this.mediaPending = false;
+    this.audioPending = false;
+    this.publishing = false;
     this.preview = h('div', { class: 'compose-preview' });
-    this.mediaInput = h('input', { type: 'file', accept: 'image/*,video/*', multiple: true, hidden: true, onchange: () => this.#pickMedia([...this.mediaInput.files]) });
-    this.audioInput = h('input', { type: 'file', accept: 'audio/*', hidden: true, onchange: () => this.#pickAudio(this.audioInput.files[0]) });
+    this.mediaInput = h('input', { type: 'file', accept: 'image/*,video/*,.heic,.heif,.mov,.m4v,.3gp', multiple: true, hidden: true, onchange: () => { void this.#pickMedia([...this.mediaInput.files]); } });
+    this.audioInput = h('input', { type: 'file', accept: 'audio/*,.m4a,.aac,.wav,.ogg,.opus,.mp3', hidden: true, onchange: () => { void this.#pickAudio(this.audioInput.files?.[0] || null); } });
     this.caption = h('textarea', { class: 'field area', maxlength: '2200', placeholder: t('captionPlaceholder') });
     this.style = h('select', { class: 'field', 'aria-label': t('slideshowStyle') },
       h('option', { value: 'fade' }, t('styleFade')),
@@ -67,10 +73,10 @@ export class ComposeSheet {
     this.message = h('p', { class: 'muted', role: 'status' });
     this.submit = h('button', { class: 'pill-btn hot wide', type: 'submit' }, t('publish'));
     this.sheet.body.append(h('form', { class: 'stack', onsubmit: event => { event.preventDefault(); this.#publish(); } },
-      h('button', { class: 'pill-btn wide', type: 'button', onclick: () => this.mediaInput.click() }, t('choosePhotosOrVideo')),
+      h('button', { class: 'pill-btn wide', type: 'button', onclick: () => this.#openPicker(this.mediaInput) }, t('choosePhotosOrVideo')),
       this.mediaInput, this.preview,
       h('div', { class: 'compose-assist' }, this.assist, this.style),
-      h('button', { class: 'pill-btn wide', type: 'button', onclick: () => this.audioInput.click() }, t('attachAudio')),
+      h('button', { class: 'pill-btn wide', type: 'button', onclick: () => this.#openPicker(this.audioInput) }, t('attachAudio')),
       this.audioInput, this.audioPreview,
       h('label', { class: 'lc-toggle nova-toggle' }, h('span', {}, t('studioSchedulePost'), h('small', { class: 'muted' }, t('studioScheduleHint'))), this.scheduleToggle),
       this.scheduleDate,
@@ -95,25 +101,60 @@ export class ComposeSheet {
     this.submit.textContent = this.scheduleToggle.checked ? t('studioSchedulePost') : t('publish');
   }
 
-  #releaseMedia() {
+  #openPicker(input) {
+    try { openFilePicker(input); }
+    catch (error) { this.message.textContent = error?.message || t('mediaPickerUnavailable'); }
+  }
+
+  #releaseMedia(invalidate = true) {
+    if (invalidate) {
+      this.mediaSelection++;
+      this.mediaPending = false;
+    }
     for (const entry of this.files) URL.revokeObjectURL(entry.url);
     this.files = [];
   }
 
-  #pickMedia(files) {
-    this.#releaseMedia();
+  async #pickMedia(files) {
+    const selection = ++this.mediaSelection;
+    this.#releaseMedia(false);
+    this.mediaPending = false;
+    if (!this.publishing && !this.audioPending) this.submit.disabled = false;
     this.mediaInput.value = '';
     this.preview.replaceChildren();
     if (!files.length) return;
-    const videos = files.filter(file => file.type.startsWith('video/'));
+    this.message.textContent = t('loading');
+    this.mediaPending = true;
+    this.submit.disabled = true;
+    let entries;
+    try {
+      entries = await Promise.all(files.map(async file => ({ file, ...(await identifyMediaFile(file)) })));
+    } catch (error) {
+      if (selection === this.mediaSelection) this.message.textContent = error?.message || t('mediaType');
+      return;
+    } finally {
+      if (selection === this.mediaSelection) {
+        this.mediaPending = false;
+        if (!this.publishing && !this.audioPending) this.submit.disabled = false;
+      }
+    }
+    if (selection !== this.mediaSelection) return;
+    const videos = entries.filter(entry => entry.kind === 'video');
+    if (entries.some(entry => entry.kind === 'unknown' || entry.kind === 'audio')) { this.message.textContent = t('mediaType'); return; }
     if (videos.length && (files.length > 1 || videos.length > 1)) { this.message.textContent = t('oneVideoOnly'); return; }
     if (files.length > MAX_PHOTOS) { this.message.textContent = t('slideshowPhotoLimit'); return; }
     const video = videos.length === 1;
-    for (const file of files) {
-      if ((!video && !file.type.startsWith('image/')) || (video && file !== videos[0])) { this.message.textContent = t('mediaType'); return; }
-      if (file.size > (video ? MAX_VIDEO : MAX_IMAGE)) { this.message.textContent = video ? t('videoTooBig') : t('imageTooBig'); return; }
+    for (const entry of entries) {
+      if ((!video && entry.kind !== 'image') || (video && entry !== videos[0])) { this.message.textContent = t('mediaType'); return; }
+      if (entry.file.size > (video ? MAX_VIDEO : MAX_IMAGE)) { this.message.textContent = video ? t('videoTooBig') : t('imageTooBig'); return; }
     }
-    this.files = files.map(file => ({ file, url: URL.createObjectURL(file) }));
+    try {
+      this.files = entries.map(entry => ({ ...entry, url: URL.createObjectURL(entry.file) }));
+    } catch (error) {
+      this.#releaseMedia(false);
+      this.message.textContent = error?.message || t('mediaPickerUnavailable');
+      return;
+    }
     this.message.textContent = '';
     for (const [index, entry] of this.files.entries()) {
       const media = video
@@ -132,24 +173,46 @@ export class ComposeSheet {
     this.#pickMedia(this.files.map(entry => entry.file));
   }
 
-  #pickAudio(file) {
+  async #pickAudio(file) {
+    const selection = ++this.audioSelection;
+    this.audioPending = false;
+    if (!this.publishing && !this.mediaPending) this.submit.disabled = false;
     if (this.audioUrl) URL.revokeObjectURL(this.audioUrl);
     this.audioFile = null;
     this.audioUrl = null;
     this.audioInput.value = '';
     this.audioPreview.replaceChildren();
     if (!file) return;
-    if (!file.type.startsWith('audio/')) { this.message.textContent = t('audioFileOnly'); return; }
+    this.audioPending = true;
+    this.submit.disabled = true;
+    let info;
+    try { info = await identifyMediaFile(file); }
+    catch (error) {
+      if (selection === this.audioSelection) this.message.textContent = error?.message || t('audioFileOnly');
+      return;
+    } finally {
+      if (selection === this.audioSelection) {
+        this.audioPending = false;
+        if (!this.publishing && !this.mediaPending) this.submit.disabled = false;
+      }
+    }
+    if (selection !== this.audioSelection) return;
+    if (info.kind !== 'audio') { this.message.textContent = t('audioFileOnly'); return; }
     if (file.size > MAX_AUDIO) { this.message.textContent = t('audioTooBig'); return; }
     this.audioFile = file;
-    this.audioUrl = URL.createObjectURL(file);
+    try { this.audioUrl = URL.createObjectURL(file); }
+    catch (error) {
+      this.audioFile = null;
+      this.message.textContent = error?.message || t('mediaPickerUnavailable');
+      return;
+    }
     this.audioPreview.append(h('audio', { src: this.audioUrl, controls: true, preload: 'metadata' }),
       h('button', { class: 'link', type: 'button', onclick: () => this.#pickAudio(null) }, t('remove')));
     this.message.textContent = '';
   }
 
   async #autoStyle() {
-    if (this.files.length < 2 || this.files.some(entry => !entry.file.type.startsWith('image/'))) {
+    if (this.files.length < 2 || this.files.some(entry => entry.kind !== 'image')) {
       this.message.textContent = t('pickSlideshowFirst');
       return;
     }
@@ -168,24 +231,34 @@ export class ComposeSheet {
   }
 
   async #upload(sb, file, storagePath = '') {
-    const name = file.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(-100) || 'media';
-    const path = storagePath || `milkyway/${auth.userId}/${Date.now()}-${crypto.randomUUID()}-${name}`;
+    const fileName = String(file?.name || 'media');
+    const name = fileName.replace(/[^a-zA-Z0-9._-]/g, '-').slice(-100) || 'media';
     try {
-      const uploaded = await sb.storage.from('portfolio').upload(path, file, { contentType: file.type });
+      const info = await identifyMediaFile(file);
+      if (info.kind === 'unknown' || !info.type) throw new Error(t('mediaType'));
+      const path = storagePath || `milkyway/${auth.userId}/${Date.now()}-${crypto.randomUUID()}-${name}`;
+      const uploaded = await sb.storage.from('portfolio').upload(path, file, {
+        contentType: info.type,
+        cacheControl: '3600',
+        upsert: false,
+      });
       if (uploaded.error) throw uploaded.error;
-      const publicUrl = sb.storage.from('portfolio').getPublicUrl(path).data?.publicUrl;
+      const publicUrl = sb.storage.from('portfolio').getPublicUrl(path)?.data?.publicUrl;
       if (!publicUrl) throw new Error('Supabase Storage did not return a public URL.');
       return { url: publicUrl, path };
     } catch (error) {
       throw Object.assign(new Error(error?.message || String(error)), {
         cause: error,
         code: error?.code,
+        statusCode: error?.statusCode,
         publishPhase: `uploading ${name}`,
       });
     }
   }
 
   async #publish() {
+    if (this.publishing) return;
+    if (this.mediaPending || this.audioPending) { this.message.textContent = t('loading'); return; }
     const caption = this.caption.value.trim();
     if (!caption && !this.files.length) { this.message.textContent = t('writeOrPick'); return; }
     if (!auth.signedIn()) { this.message.textContent = t('signInToContinue'); return; }
@@ -200,11 +273,12 @@ export class ComposeSheet {
       }
       scheduledAt = new Date(scheduledTime).toISOString();
     }
+    this.publishing = true;
     this.submit.disabled = true; this.message.textContent = t('uploading');
     let phase = 'connecting to Supabase';
     try {
       const sb = await supabase();
-      const video = this.files[0]?.file.type.startsWith('video/');
+      const video = this.files[0]?.kind === 'video';
       phase = 'uploading post media';
       const mediaItems = [];
       const mediaPreviewItems = [];
@@ -274,6 +348,9 @@ export class ComposeSheet {
       const failedPhase = error?.publishPhase || phase;
       console.error('[compose] post publication failed', { phase: failedPhase, error });
       this.message.textContent = publishError(error, failedPhase);
-    } finally { this.submit.disabled = false; }
+    } finally {
+      this.publishing = false;
+      this.submit.disabled = false;
+    }
   }
 }

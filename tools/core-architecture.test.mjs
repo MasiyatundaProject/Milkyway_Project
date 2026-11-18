@@ -10,6 +10,7 @@ import { runApi } from '../api/_lib/fetch-adapter.js';
 import { closeRoom, livekitUsable } from '../api/_lib/livekit.js';
 import { postShareResponse } from '../api/_lib/post-share.js';
 import { assertRoomAccess } from '../milkyway/app/core/livekit-access.js';
+import { identifyMediaFile, mediaInfo, openFilePicker } from '../milkyway/app/core/media-files.js';
 import { checkDeployment } from '../milkyway/app/core/update-check.js';
 
 const A = '11111111-1111-4111-8111-111111111111'; // public author
@@ -364,7 +365,7 @@ test('profile photo upload is scoped, saved to the profile, and refreshed in the
   const migration = readFileSync(new URL('../supabase/migrations/20261206_milkyway_profile_avatar_storage.sql', import.meta.url), 'utf8');
   const repair = readFileSync(new URL('../supabase/milkyway-schema-repair.sql', import.meta.url), 'utf8');
   assert.match(profileView, /event\.currentTarget\.files\?\.\[0\] \|\| null/);
-  assert.match(profileView, /PROFILE_PHOTO_TYPES = new Set\(\['image\/jpeg', 'image\/png', 'image\/webp'\]\)/);
+  assert.match(profileView, /PROFILE_PHOTO_TYPES = new Set\(\['image\/jpeg', 'image\/png', 'image\/webp', 'image\/heic'/);
   assert.match(profileView, /storage\.from\('portfolio'\)\.upload\(uploadedPath, selectedPhoto/);
   assert.match(profileView, /changes\.avatar_url = avatarUrl/);
   assert.match(profileView, /profiles\.update\(updatedProfile\)/);
@@ -373,6 +374,29 @@ test('profile photo upload is scoped, saved to the profile, and refreshed in the
   assert.match(migration, /on conflict \(id\) do update set public = true/i);
   assert.match(migration, /\(storage\.foldername\(name\)\)\[2\] = auth\.uid\(\)::text/);
   assert.match(repair, /mw_profile_avatar_insert/);
+});
+
+test('media picker detects device file extensions and signatures when MIME types are missing', async () => {
+  assert.deepEqual(mediaInfo({ name: 'camera.HEIC', type: '' }), { kind: 'image', type: 'image/heic', extension: 'heic' });
+  assert.deepEqual(mediaInfo({ name: 'clip.MOV', type: 'application/octet-stream' }), { kind: 'video', type: 'video/quicktime', extension: 'mov' });
+  const png = new Blob([Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])]);
+  Object.defineProperty(png, 'name', { value: 'camera-file' });
+  assert.deepEqual(await identifyMediaFile(png), { kind: 'image', type: 'image/png', extension: 'png' });
+  let clicked = false;
+  openFilePicker({ showPicker() { throw new Error('Unsupported in this WebView.'); }, click() { clicked = true; } });
+  assert.equal(clicked, true);
+});
+
+test('compose upload normalizes MIME type and reports storage transport errors with upload phase', () => {
+  const compose = readFileSync(new URL('../milkyway/app/ui/compose-sheet.js', import.meta.url), 'utf8');
+  const optimizer = readFileSync(new URL('../milkyway/app/core/media-optimizer.js', import.meta.url), 'utf8');
+  assert.match(compose, /identifyMediaFile\(file\)/);
+  assert.match(compose, /contentType: info\.type/);
+  assert.match(compose, /openFilePicker\(input\)/);
+  assert.match(compose, /postNetworkFailed'\)\} \(\$\{phase\}\): \$\{message/);
+  assert.match(optimizer, /decodeImage\(file\)/);
+  assert.match(optimizer, /isHeic/);
+  assert.match(optimizer, /video\.videoWidth > 4096 \|\| video\.videoHeight > 4096/);
 });
 
 test('DM room cleanup RPC is installed and token issuance avoids cleanup management calls', () => {

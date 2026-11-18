@@ -1,3 +1,6 @@
+import { mediaInfo } from './media-files.js';
+import { t } from './i18n.js';
+
 const PREVIEW_EDGE = 640;
 
 function outputSize(width, height, maxEdge) {
@@ -68,13 +71,12 @@ export async function optimizeImage(file) {
     return await optimizeInWorker(file);
   } catch (workerError) {
     console.warn('[media] worker photo optimization unavailable; trying the browser main thread', workerError);
-    if (typeof createImageBitmap !== 'function') {
-      console.warn('[media] photo optimization unavailable; uploading the selected file');
-      return { full: file, preview: null };
-    }
     try {
       return await optimizeImageOnMain(file);
     } catch (error) {
+      if (/^image\/hei[cf]/i.test(mediaInfo(file).type)) {
+        throw new Error(`${t('heicConversionFailed')} ${error?.message || ''}`.trim(), { cause: error });
+      }
       console.warn('[media] photo optimization unavailable; uploading the selected file', error);
       return { full: file, preview: null };
     }
@@ -85,18 +87,20 @@ export async function optimizeImage(file) {
 export async function optimizeVideo(file, { onProgress = () => {} } = {}) {
   if (file.size < 8 * 1024 * 1024 || typeof MediaRecorder !== 'function') return file;
   const video = document.createElement('video');
-  const objectUrl = URL.createObjectURL(file);
+  let objectUrl = '';
   let sourceStream;
   let outputStream;
   let recorder;
   let frame = 0;
   try {
+    objectUrl = URL.createObjectURL(file);
     video.muted = true;
     video.playsInline = true;
     video.preload = 'metadata';
     video.src = objectUrl;
     await waitFor(video, 'loadedmetadata');
     if (!Number.isFinite(video.duration) || video.duration <= 0 || video.duration > 120) return file;
+    if (video.videoWidth > 4096 || video.videoHeight > 4096) return file;
 
     const mimeType = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/mp4']
       .find(type => MediaRecorder.isTypeSupported?.(type));
@@ -160,43 +164,76 @@ export async function optimizeVideo(file, { onProgress = () => {} } = {}) {
     for (const track of [...(sourceStream?.getTracks() || []), ...(outputStream?.getTracks() || [])]) track.stop();
     video.removeAttribute('src');
     video.load();
-    URL.revokeObjectURL(objectUrl);
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
   }
 }
 
 async function optimizeImageOnMain(file) {
-  const bitmap = await createImageBitmap(file);
+  const { source, width: sourceWidth, height: sourceHeight, release } = await decodeImage(file);
+  const isHeic = /^image\/hei[cf]/i.test(mediaInfo(file).type);
   try {
     const maxEdge = 2048;
-    const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
-    const width = Math.max(1, Math.round(bitmap.width * scale));
-    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const scale = Math.min(1, maxEdge / Math.max(sourceWidth, sourceHeight));
+    const width = Math.max(1, Math.round(sourceWidth * scale));
+    const height = Math.max(1, Math.round(sourceHeight * scale));
     let full = file;
-    if (Math.max(bitmap.width, bitmap.height) > maxEdge || file.size > 600 * 1024) {
+    if (isHeic || Math.max(sourceWidth, sourceHeight) > maxEdge || file.size > 600 * 1024) {
       const canvas = document.createElement('canvas');
       canvas.width = width;
       canvas.height = height;
       const context = canvas.getContext('2d');
       if (!context) throw new Error('Canvas 2D context is unavailable.');
-      context.drawImage(bitmap, 0, 0, width, height);
+      context.drawImage(source, 0, 0, width, height);
       const fullBlob = await new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Photo encoding failed.')), 'image/webp', 0.82));
-      if (fullBlob.size < file.size) full = await blobToFile(fullBlob, `${file.name.replace(/\.[^.]+$/, '')}.webp`, 'image/webp');
+      if (fullBlob.size < file.size || isHeic) full = await blobToFile(fullBlob, `${file.name.replace(/\.[^.]+$/, '') || 'photo'}.webp`, 'image/webp');
     }
     let preview = null;
-    if (Math.max(bitmap.width, bitmap.height) > PREVIEW_EDGE || file.size > 300 * 1024) {
-      const previewScale = Math.min(1, PREVIEW_EDGE / Math.max(bitmap.width, bitmap.height));
+    if (Math.max(sourceWidth, sourceHeight) > PREVIEW_EDGE || file.size > 300 * 1024) {
+      const previewScale = Math.min(1, PREVIEW_EDGE / Math.max(sourceWidth, sourceHeight));
       const previewCanvas = document.createElement('canvas');
-      previewCanvas.width = Math.max(1, Math.round(bitmap.width * previewScale));
-      previewCanvas.height = Math.max(1, Math.round(bitmap.height * previewScale));
+      previewCanvas.width = Math.max(1, Math.round(sourceWidth * previewScale));
+      previewCanvas.height = Math.max(1, Math.round(sourceHeight * previewScale));
       const previewContext = previewCanvas.getContext('2d');
       if (!previewContext) throw new Error('Canvas 2D context is unavailable.');
-      previewContext.drawImage(bitmap, 0, 0, previewCanvas.width, previewCanvas.height);
+      previewContext.drawImage(source, 0, 0, previewCanvas.width, previewCanvas.height);
       const previewBlob = await new Promise((resolve, reject) => previewCanvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Photo preview encoding failed.')), 'image/webp', 0.68));
       if (previewBlob.size < file.size) preview = await blobToFile(previewBlob, `${file.name.replace(/\.[^.]+$/, '')}-preview.webp`, 'image/webp');
     }
     return { full, preview };
   } finally {
-    bitmap.close?.();
+    release();
+  }
+}
+
+async function decodeImage(file) {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const bitmap = await createImageBitmap(file);
+      return { source: bitmap, width: bitmap.width, height: bitmap.height, release: () => bitmap.close?.() };
+    } catch (error) {
+      if (typeof Image !== 'function') throw error;
+    }
+  }
+  if (typeof Image !== 'function') throw new Error('Image decoding is unavailable.');
+  let url = '';
+  try {
+    url = URL.createObjectURL(file);
+    const image = await new Promise((resolve, reject) => {
+      const element = new Image();
+      element.onload = () => resolve(element);
+      element.onerror = () => reject(new Error('The browser could not decode this photo.'));
+      element.src = url;
+    });
+    if (!image.naturalWidth || !image.naturalHeight) throw new Error('The browser could not decode this photo.');
+    return {
+      source: image,
+      width: image.naturalWidth,
+      height: image.naturalHeight,
+      release: () => URL.revokeObjectURL(url),
+    };
+  } catch (error) {
+    if (url) URL.revokeObjectURL(url);
+    throw error;
   }
 }
 
@@ -220,12 +257,13 @@ function waitFor(video, eventName) {
 /** Extracts a small poster frame without transcoding or uploading the whole video twice. */
 export async function createVideoPreview(file) {
   const video = document.createElement('video');
-  const objectUrl = URL.createObjectURL(file);
+  let objectUrl = '';
   video.muted = true;
   video.playsInline = true;
   video.preload = 'metadata';
-  video.src = objectUrl;
   try {
+    objectUrl = URL.createObjectURL(file);
+    video.src = objectUrl;
     await waitFor(video, 'loadedmetadata');
     if (Number.isFinite(video.duration) && video.duration > 0.2) {
       video.currentTime = Math.min(0.25, video.duration / 2);
@@ -240,7 +278,7 @@ export async function createVideoPreview(file) {
   } finally {
     video.removeAttribute('src');
     video.load();
-    URL.revokeObjectURL(objectUrl);
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
   }
 }
 

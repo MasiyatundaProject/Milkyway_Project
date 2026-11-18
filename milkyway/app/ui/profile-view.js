@@ -2,6 +2,8 @@
 // Header, counts and posts come from Supabase as the caller, so row-level security decides what is visible.
 import { t } from '../core/i18n.js';
 import { auth, supabase } from '../core/net.js';
+import { identifyMediaFile, openFilePicker } from '../core/media-files.js';
+import { optimizeImage } from '../core/media-optimizer.js';
 import { setImage, poster } from '../core/media.js';
 import { profiles } from '../data/profiles.js';
 import { actions } from '../data/feed.js';
@@ -15,20 +17,33 @@ const quiet = promise => Promise.resolve(promise).then(result => result, () => (
 
 const PROFILE_POST_REQUIRED = ['id', 'author_id', 'caption', 'media_url', 'media_type', 'created_at'];
 const PROFILE_POST_OPTIONAL = ['scheduled_at', 'slideshow_style', 'audio_url', 'media_items', 'media_preview_items'];
-const PROFILE_PHOTO_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const PROFILE_PHOTO_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'image/heic-sequence', 'image/heif-sequence']);
 const PROFILE_PHOTO_MAX_BYTES = 10 * 1024 * 1024;
 const PROFILE_PHOTO_MAX_PIXELS = 40_000_000;
 
 async function validateProfilePhoto(file) {
-  if (!file || !PROFILE_PHOTO_TYPES.has(file.type)) throw new Error(t('photoUnsupported'));
+  const info = await identifyMediaFile(file);
+  if (info.kind !== 'image' || !PROFILE_PHOTO_TYPES.has(info.type)) throw new Error(t('photoUnsupported'));
   if (file.size > PROFILE_PHOTO_MAX_BYTES) throw new Error(t('photoTooLarge'));
   const url = URL.createObjectURL(file);
   try {
     const dimensions = await new Promise((resolve, reject) => {
-      const image = new Image();
-      image.onload = () => resolve([image.naturalWidth, image.naturalHeight]);
-      image.onerror = () => reject(new Error(t('photoUnsupported')));
-      image.src = url;
+      if (typeof createImageBitmap === 'function') {
+        createImageBitmap(file).then(bitmap => {
+          resolve([bitmap.width, bitmap.height]);
+          bitmap.close?.();
+        }).catch(() => {
+          const image = new Image();
+          image.onload = () => resolve([image.naturalWidth, image.naturalHeight]);
+          image.onerror = () => reject(new Error(t('photoUnsupported')));
+          image.src = url;
+        });
+      } else {
+        const image = new Image();
+        image.onload = () => resolve([image.naturalWidth, image.naturalHeight]);
+        image.onerror = () => reject(new Error(t('photoUnsupported')));
+        image.src = url;
+      }
     });
     if (!dimensions[0] || !dimensions[1]) throw new Error(t('photoUnsupported'));
     if (dimensions[0] * dimensions[1] > PROFILE_PHOTO_MAX_PIXELS) throw new Error(t('photoTooLarge'));
@@ -301,12 +316,14 @@ export class ProfileView {
     const bio = h('textarea', { class: 'field area', maxlength: '300', placeholder: t('bio') });
     bio.value = profile.bio || '';
     const message = h('p', { class: 'muted', role: 'status' });
-    const photoInput = h('input', { type: 'file', accept: [...PROFILE_PHOTO_TYPES].join(','), hidden: true });
+    const photoInput = h('input', { type: 'file', accept: 'image/*,.heic,.heif', hidden: true });
     const photoPreview = h('div', { class: 'profile-photo-preview' }, avatar(profile, 72));
     let selectedPhoto = null;
     let previewUrl = '';
     let selectionVersion = 0;
-    const choosePhoto = h('button', { class: 'pill-btn', type: 'button', onclick: () => photoInput.click() }, t('choosePhoto'));
+    const choosePhoto = h('button', { class: 'pill-btn', type: 'button', onclick: () => {
+      try { openFilePicker(photoInput); } catch (error) { message.textContent = error.message || t('photoUnsupported'); }
+    } }, t('choosePhoto'));
     const clearPreview = () => {
       if (previewUrl) URL.revokeObjectURL(previewUrl);
       previewUrl = '';
@@ -317,6 +334,8 @@ export class ProfileView {
       if (!file) return;
       const version = ++selectionVersion;
       selectedPhoto = null;
+      submit.disabled = true;
+      choosePhoto.disabled = true;
       clearPreview();
       try {
         await validateProfilePhoto(file);
@@ -329,6 +348,11 @@ export class ProfileView {
         if (version !== selectionVersion) return;
         photoInput.value = '';
         message.textContent = error?.message || t('photoUnsupported');
+      } finally {
+        if (version === selectionVersion) {
+          submit.disabled = false;
+          choosePhoto.disabled = false;
+        }
       }
     });
     const submit = h('button', { class: 'pill-btn hot wide', type: 'submit' }, t('save'));
@@ -337,6 +361,7 @@ export class ProfileView {
       const handle = username.value.trim().replace(/^@/, '');
       if (handle && !/^[A-Za-z0-9._]{2,30}$/.test(handle)) { message.textContent = t('usernameRule'); return; }
       if (!auth.userId) { message.textContent = t('signInToContinue'); return; }
+      if (submit.disabled) return;
       submit.disabled = true; choosePhoto.disabled = true; photoInput.disabled = true;
       message.textContent = selectedPhoto ? t('uploading') : t('loading');
       let uploadedPath = '';
@@ -344,10 +369,15 @@ export class ProfileView {
         const sb = await supabase();
         let avatarUrl;
         if (selectedPhoto) {
-          const extension = selectedPhoto.type === 'image/jpeg' ? 'jpg' : selectedPhoto.type.slice('image/'.length);
+          const optimized = await optimizeImage(selectedPhoto);
+          selectedPhoto = optimized.full;
+          const photoInfo = await identifyMediaFile(selectedPhoto);
+          if (!['image/jpeg', 'image/png', 'image/webp'].includes(photoInfo.type)) throw new Error(t('photoUnsupported'));
+          if (selectedPhoto.size > PROFILE_PHOTO_MAX_BYTES) throw new Error(t('photoTooLarge'));
+          const extension = photoInfo.extension;
           uploadedPath = `milkyway/${auth.userId}/avatars/${crypto.randomUUID()}.${extension}`;
           const { error: uploadError } = await sb.storage.from('portfolio').upload(uploadedPath, selectedPhoto, {
-            contentType: selectedPhoto.type,
+            contentType: photoInfo.type,
             cacheControl: '3600',
             upsert: false,
           });

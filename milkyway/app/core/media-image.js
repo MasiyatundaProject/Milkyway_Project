@@ -1,3 +1,5 @@
+import { mediaInfo } from './media-files.js';
+
 const MAX_IMAGE_EDGE = 2048;
 const PREVIEW_EDGE = 640;
 
@@ -27,15 +29,22 @@ function extensionFor(blob, fallback) {
 export async function optimizeImageFile(file) {
   if (typeof createImageBitmap !== 'function') throw new Error('Image decoding is unavailable.');
   const bitmap = await createImageBitmap(file);
+  const isHeic = /^image\/hei[cf]/i.test(mediaInfo(file).type);
   try {
     let full = file;
     if (Math.max(bitmap.width, bitmap.height) > MAX_IMAGE_EDGE || file.size > 600 * 1024) {
       const { width, height } = outputSize(bitmap.width, bitmap.height, MAX_IMAGE_EDGE);
       const fullBlob = await encode(bitmap, width, height, 'image/webp', 0.82, MAX_IMAGE_EDGE);
-      if (fullBlob.size < file.size) {
+      if (fullBlob.size < file.size || isHeic) {
         const name = file.name.replace(/\.[^.]+$/, '');
         full = new File([fullBlob], `${name}.${extensionFor(fullBlob, 'webp')}`, { type: fullBlob.type, lastModified: Date.now() });
       }
+    }
+    if (isHeic && full === file) {
+      const { width, height } = outputSize(bitmap.width, bitmap.height, MAX_IMAGE_EDGE);
+      const converted = await encode(bitmap, width, height, 'image/webp', 0.82, MAX_IMAGE_EDGE);
+      const name = file.name.replace(/\.[^.]+$/, '') || 'photo';
+      full = new File([converted], `${name}.${extensionFor(converted, 'webp')}`, { type: converted.type, lastModified: Date.now() });
     }
 
     let preview = null;
