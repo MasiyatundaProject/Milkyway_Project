@@ -31,6 +31,7 @@ import { loadLiveKit } from '../core/sdk.js';
 import { assertRoomAccess } from '../core/livekit-access.js';
 import { device } from '../core/device.js';
 import { sendGift } from '../data/gifts.js';
+import { createVoiceEffects, VOICE_PRESETS } from './voice-effects.js';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -135,6 +136,9 @@ export class LiveSession extends Emitter {
     this.stageAction = null;
     this.entered = false;    // true after the first connection of this visit; later joins are reconnects
     this.stage = host ? 'host' : 'audience';
+    this.voicePreset = 'normal';
+    this.voiceCapture = null;
+    this.voiceEnabled = false;
   }
 
   get settings() { return this.status?.settings || {}; }
@@ -292,6 +296,9 @@ export class LiveSession extends Emitter {
     this.audioElements?.forEach(element => element.remove()); this.audioElements?.clear();
     if (this.closed) return;
     this.onStage = false;
+    if (this.voiceCapture) this.voiceCapture.published = false;
+    if (this.voiceCapture) this.voiceCapture.track.enabled = false;
+    this.voiceEnabled = false;
     this.rightsWaitSince = 0;
     tokenCache.delete(this.live.room);
     return this.join();
@@ -308,6 +315,7 @@ export class LiveSession extends Emitter {
     }
     this.#removeAudioUnlock();
     this.audioElements?.forEach(element => element.remove()); this.audioElements?.clear();
+    await this.#releaseVoiceCapture();
     try { await this.room?.disconnect(); } catch {}
     try { if (this.channel) (await supabase()).removeChannel(this.channel); } catch {}
     this.room = null; this.channel = null;
@@ -370,11 +378,23 @@ export class LiveSession extends Emitter {
   async toggleMic() {
     const lp = this.room?.localParticipant;
     if (!lp || !this.#mayPublish()) return false;
-    const next = !lp.isMicrophoneEnabled;
+    const next = !this.voiceEnabled;
     if (next && !this.host && this.self?.hostMuted) throw new Error(t('guestMutedByHost'));
-    await lp.setMicrophoneEnabled(next);
+    if (next) await this.#enableMicrophone();
+    else {
+      if (this.voiceCapture) this.voiceCapture.track.enabled = false;
+      this.voiceEnabled = false;
+    }
     this.#emitMedia();
     return next;
+  }
+  async setVoicePreset(id) {
+    if (!VOICE_PRESETS.some(preset => preset.id === id)) throw new Error(t('voicePresetUnavailable'));
+    if (id !== 'normal' && this.voiceCapture && !this.voiceCapture.effects) throw new Error(t('voiceEffectsUnsupported'));
+    this.voiceCapture?.effects?.setPreset(id);
+    this.voicePreset = id;
+    this.emit('voice-preset', id);
+    return id;
   }
   async toggleCamera() {
     const lp = this.room?.localParticipant;
@@ -384,7 +404,7 @@ export class LiveSession extends Emitter {
     this.#emitMedia();
     return next;
   }
-  get micOn() { return !!this.room?.localParticipant?.isMicrophoneEnabled; }
+  get micOn() { return this.voiceEnabled; }
   get cameraOn() { return !!this.room?.localParticipant?.isCameraEnabled; }
   /** Current own media state for the control buttons. */
   get media() {
@@ -481,7 +501,7 @@ export class LiveSession extends Emitter {
   // ---- Internals -------------------------------------------------------------------------------------------
   async #publish() {
     const lp = this.room.localParticipant;
-    await lp.setMicrophoneEnabled(true);
+    await this.#enableMicrophone();
     if (this.mode === 'video') await lp.setCameraEnabled(true, { facingMode: 'user' });
     this.facing = 'user';
     if (this.published) { this.refresh(); return; } // reconnecting: the host's current settings stay as they are
@@ -498,7 +518,7 @@ export class LiveSession extends Emitter {
   async #enforceAudience() {
     const lp = this.room?.localParticipant;
     if (!lp) return;
-    await lp.setMicrophoneEnabled(false).catch(() => {});
+    await this.#releaseVoiceCapture();
     await lp.setCameraEnabled(false).catch(() => {});
     for (const publication of lp.trackPublications?.values?.() || []) {
       if (publication.track) await lp.unpublishTrack(publication.track).catch(() => {});
@@ -523,7 +543,7 @@ export class LiveSession extends Emitter {
       const lp = this.room.localParticipant;
       if (!this.seated) {
         clearTimeout(this.rightsTimer); this.rightsWaitSince = 0;
-        if (this.onStage || lp.isMicrophoneEnabled || lp.isCameraEnabled) await this.#stopPublishing();
+        if (this.onStage || this.voiceEnabled || lp.isCameraEnabled) await this.#stopPublishing();
         return;
       }
       // An audio LIVE guest muted by the host holds no publish right at all; that is expected, not "waiting".
@@ -534,25 +554,81 @@ export class LiveSession extends Emitter {
         // Promoted: the host approved and LiveKit granted the rights. Camera and mic go live now.
         this.onStage = true;
         try {
-          // One getUserMedia call for both (a single permission prompt); the mic is published so the host hears them.
-          if (this.mode === 'video' && !self.hostMuted) await lp.enableCameraAndMicrophone();
-          else if (this.mode === 'video') await lp.setCameraEnabled(true, { facingMode: this.facing || 'user' });
-          else if (!self.hostMuted) await lp.setMicrophoneEnabled(true);
+          if (this.mode === 'video') await lp.setCameraEnabled(true, { facingMode: this.facing || 'user' });
+          if (!self.hostMuted) await this.#enableMicrophone();
         } catch (error) {
           if (error?.name === 'NotAllowedError') this.emit('error', Object.assign(new Error(t('cameraNeeded')), { status: 0 }));
-          // Camera refused / missing in a video Live: the guest still joins with their voice.
-          if (this.mode === 'video' && !self.hostMuted && !lp.isMicrophoneEnabled) await lp.setMicrophoneEnabled(true).catch(() => {});
+          // A camera refusal must not prevent an approved guest from joining with voice.
+          if (this.mode === 'video' && !self.hostMuted && !this.voiceEnabled) {
+            try { await this.#enableMicrophone(); } catch (micError) { this.emit('error', micError); }
+          }
         }
         this.resumeAudio();
         this.emit('stage', { onStage: true });
       }
-      if (self.hostMuted && lp.isMicrophoneEnabled) await lp.setMicrophoneEnabled(false).catch(() => {});
+      if (self.hostMuted && this.voiceEnabled) await this.#releaseVoiceCapture();
       this.#emitMedia();
     } finally {
       this.syncing = false;
       this.#setStage(this.#deriveStage());
       if (this.syncAgain) { this.syncAgain = false; setTimeout(() => this.#syncStage(), 0); }
     }
+  }
+
+  async #enableMicrophone() {
+    const lp = this.room?.localParticipant;
+    if (!lp) throw new Error(t('liveUnavailable'));
+    let capture = this.voiceCapture;
+    if (capture?.input.getAudioTracks().some(track => track.readyState === 'ended')) {
+      await this.#releaseVoiceCapture();
+      capture = null;
+    }
+    if (!capture) {
+      const input = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      let effects = null;
+      try { effects = createVoiceEffects(input, this.voicePreset); }
+      catch {
+        if (this.voicePreset !== 'normal') {
+          input.getTracks().forEach(track => track.stop());
+          throw new Error(t('voiceEffectsUnsupported'));
+        }
+      }
+      const track = effects?.stream.getAudioTracks()[0] || input.getAudioTracks()[0];
+      if (!track) {
+        effects?.close();
+        input.getTracks().forEach(item => item.stop());
+        throw new Error(t('recordingFailed'));
+      }
+      capture = this.voiceCapture = { input, effects, track, published: false };
+    }
+    capture.track.enabled = true;
+    try {
+      if (!capture.published) {
+        if (typeof lp.publishTrack !== 'function') throw new Error(t('voiceEffectsUnsupported'));
+        await lp.publishTrack(capture.track, { source: this.sdk.Track.Source.Microphone });
+        capture.published = true;
+      }
+      capture.track.enabled = true;
+      this.voiceEnabled = true;
+    } catch (error) {
+      if (!capture.published) await this.#releaseVoiceCapture();
+      throw error;
+    }
+  }
+
+  async #releaseVoiceCapture() {
+    const capture = this.voiceCapture;
+    this.voiceCapture = null;
+    this.voiceEnabled = false;
+    if (!capture) return;
+    const lp = this.room?.localParticipant;
+    if (capture.published && lp) {
+      try { await lp.unpublishTrack(capture.track); } catch (error) { console.warn('[live] microphone unpublish failed', error); }
+    }
+    capture.track.enabled = false;
+    capture.effects?.close();
+    capture.track.stop();
+    capture.input.getTracks().forEach(track => track.stop());
   }
 
   // Approved but this connection has no publish rights yet. The server grants them on the live connection before it

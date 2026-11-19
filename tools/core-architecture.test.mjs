@@ -115,6 +115,28 @@ test('Watch Together synchronizes authorized chat playback and cleans up its pla
   assert.match(worker, /ui\/watch-party\.js/);
 });
 
+test('voice presets process chat recordings and published Live audio with deterministic cleanup', () => {
+  const effects = readFileSync(new URL('../milkyway/app/ui/voice-effects.js', import.meta.url), 'utf8');
+  const composer = readFileSync(new URL('../milkyway/app/ui/chat-composer.js', import.meta.url), 'utf8');
+  const liveSession = readFileSync(new URL('../milkyway/app/ui/live-session.js', import.meta.url), 'utf8');
+  const liveView = readFileSync(new URL('../milkyway/app/ui/live-view.js', import.meta.url), 'utf8');
+  const worker = readFileSync(new URL('../milkyway/sw.js', import.meta.url), 'utf8');
+  for (const preset of ['normal', 'child', 'female', 'male', 'robot', 'chipmunk', 'monster', 'radio']) {
+    assert.match(effects, new RegExp(`id: '${preset}'`));
+  }
+  assert.match(effects, /createScriptProcessor/);
+  assert.match(effects, /createMediaStreamDestination/);
+  assert.match(effects, /close\(\)[\s\S]*context\.close/);
+  assert.match(composer, /createVoiceEffects\(stream, this\.voicePreset\)/);
+  assert.match(composer, /effects\?\.close\(\)/);
+  assert.match(liveSession, /publishTrack\(capture\.track, \{ source: this\.sdk\.Track\.Source\.Microphone \}\)/);
+  assert.match(liveSession, /setVoicePreset\(id\)/);
+  assert.match(liveSession, /#releaseVoiceCapture/);
+  assert.match(liveView, /data-act': 'voice'/);
+  assert.match(liveView, /voicePicker\(session\)/);
+  assert.match(worker, /ui\/voice-effects\.js/);
+});
+
 test('ordinary LiveKit token checks avoid RoomService management requests', async () => {
   const originalFetch = globalThis.fetch;
   const previousEnv = Object.fromEntries(['LIVEKIT_URL', 'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET'].map(key => [key, process.env[key]]));

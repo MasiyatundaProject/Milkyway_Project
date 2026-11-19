@@ -320,6 +320,7 @@ html[data-muted] .mute-toggle .i-sound, html:not([data-muted]) .mute-toggle .i-m
 .host-stage .live-tools, .live-slide.on-stage .live-tools { display: flex; }
 .live-tools .icon-btn { background: rgba(0,0,0,.38); }
 .live-tools .icon-btn.off { color: #ff6b8b; }
+.live-tools .live-voice-btn.active { color: #fff; background: rgba(156,91,255,.62); box-shadow: 0 0 0 2px rgba(190,145,255,.35); }
 .live-tools .icon-btn.leave { color: #ff6b8b; }
 .live-tools .icon-btn.locked { color: #ff6b8b; opacity: .7; box-shadow: inset 0 0 0 1.5px rgba(255,107,139,.6); }
 /* Host-only controls on each guest box: mute / allow mic, back to audience, remove from LIVE. */
@@ -507,6 +508,8 @@ button.live-viewers { color: inherit; font: inherit; font-size: 12.5px; cursor: 
 .lc-quote { margin: 0; padding: 8px 12px; border-left: 3px solid var(--accent); background: rgba(255,255,255,.05); border-radius: 0 10px 10px 0; font-size: 14px; overflow-wrap: anywhere; }
 .lc-actions { display: grid; gap: 8px; }
 .lc-actions .pill-btn { width: 100%; padding: 12px; font-size: 14px; }
+.voice-picker-sheet .voice-preset-option { width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2); color: var(--fg); text-align: start; }
+.voice-picker-sheet .voice-preset-option.on { border-color: var(--accent); background: rgba(176,92,255,.2); }
 .lc-invite-text { margin: 0 0 6px; text-align: center; font-size: 15px; }
 
 /* ---- Sheets, forms, toast ------------------------------------------------------------------------------------ */
@@ -865,6 +868,9 @@ html[data-low-end] .create-orb, html[data-low-end] .gift-card, html[data-low-end
 .dm-composer-actions { display: flex; flex: none; align-items: flex-end; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel-2); }
 .dm-composer-actions .chat-tool { background: transparent; }
 .dm-composer-actions .chat-tool.active { background: var(--electric); }
+.dm-composer-actions .chat-voice-changer { color: var(--accent-2); }
+.chat-voice-preset { width: min(135px, 34vw); height: 38px; padding: 0 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); color: var(--fg); font-size: 12px; }
+.chat-voice-preset[hidden] { display: none; }
 .dm-composer-actions .chat-video-note { color: #fff; background: #c92f50; }
 .dm-composer-actions .chat-video-note:hover { background: #e13b5e; }
 .dm-composer-actions .chat-video-note.is-recording { color: #fff; background: #f12651; box-shadow: 0 0 0 3px rgba(241,38,81,.28); animation: videoNoteRecordPulse 1s ease-in-out infinite; }

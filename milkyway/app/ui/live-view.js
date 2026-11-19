@@ -15,6 +15,7 @@ import { HostControls, InvitePrompt } from './live-controls.js';
 import { Sheet } from './sheet.js';
 import { openShare } from './share-sheet.js';
 import { h, icon, count, toast, paintAvatar, brandMark, avatar } from './dom.js';
+import { VOICE_PRESETS } from './voice-effects.js';
 
 const JOIN_DELAY = 200;
 const MAX_COMMENTS = 40;
@@ -54,10 +55,11 @@ function liveChrome({ host = false } = {}) {
   const form = h('form', { class: 'live-form', 'data-no-swipe': true }, input);
   // Stream controls: always visible for the host, shown to a viewer while they are a guest on stage.
   const micBtn = h('button', { class: 'icon-btn', type: 'button', 'data-act': 'mic', 'aria-label': t('microphone'), title: t('microphone'), html: icon.mic });
+  const voiceBtn = h('button', { class: 'icon-btn live-voice-btn', type: 'button', 'data-act': 'voice', 'aria-label': t('voiceChanger'), title: t('voiceChanger'), html: '♫' });
   const camBtn = h('button', { class: 'icon-btn live-video-only', type: 'button', 'data-act': 'cam', 'aria-label': t('camera'), title: t('camera'), html: icon.camera });
   const tools = h('div', { class: 'live-tools', 'data-no-swipe': true },
     h('button', { class: 'icon-btn live-video-only', type: 'button', 'data-act': 'flip', 'aria-label': t('flipCamera'), title: t('flipCamera'), html: icon.flip }),
-    micBtn, camBtn,
+    voiceBtn, micBtn, camBtn,
     host ? null : h('button', { class: 'icon-btn leave', type: 'button', 'data-act': 'leave-stage', 'aria-label': t('leaveStage'), title: t('leaveStage'), html: icon.leave }));
   const guestsBadge = h('span', { class: 'live-badge-count', hidden: true });
   const seatCount = h('span', { class: 'live-seat-count', hidden: true, 'aria-live': 'polite' });
@@ -79,7 +81,7 @@ function liveChrome({ host = false } = {}) {
     h('div', { class: 'live-host', 'data-act': 'profile' }, avatarNode, h('div', {}, name, h('small', { class: 'live-tag' }, t('live'))), host ? null : follow),
     viewers, close);
   const node = h('section', { class: 'slide live-slide' }, grid, brandMark('live'), h('div', { class: 'shade' }), top, tools, pinned, comments, hearts, banner, state, host ? requests : null, bar);
-  node._refs = { avatarNode, name, follow, viewers: viewers.querySelector('b'), viewersWrap: viewers, cover, background, stage, guests, grid, hostLabel, requests, pinned, comments, hearts, banner, state, input, form, tools, micBtn, camBtn, stageBtn, stageLabel, giftBtn, likeBtn, guestsBadge, seatCount };
+  node._refs = { avatarNode, name, follow, viewers: viewers.querySelector('b'), viewersWrap: viewers, cover, background, stage, guests, grid, hostLabel, requests, pinned, comments, hearts, banner, state, input, form, tools, micBtn, voiceBtn, camBtn, stageBtn, stageLabel, giftBtn, likeBtn, guestsBadge, seatCount };
   // Re-arrange the grid whenever a guest tile appears or leaves (tiles come from both room status and video tracks).
   new MutationObserver(() => layoutGrid(node)).observe(guests, { childList: true });
   return node;
@@ -450,6 +452,12 @@ function connectUi(slide, session) {
     session.on('stage-state', () => paintStageButton(slide, session)),
     session.on('stage-action', () => paintStageButton(slide, session)),
     session.on('media', media => paintMedia(slide, media)),
+    session.on('voice-preset', preset => {
+      const option = VOICE_PRESETS.find(item => item.id === preset);
+      r.voiceBtn.classList.toggle('active', preset !== 'normal');
+      r.voiceBtn.title = `${t('voiceChanger')}: ${t(option?.key || 'voicePresetNormal')}`;
+      r.voiceBtn.setAttribute('aria-label', r.voiceBtn.title);
+    }),
     session.on('stage', ({ onStage }) => { slide.classList.toggle('on-stage', onStage); if (onStage) toast(t('youAreOnStage')); }),
     session.on('error', error => { if (error?.message) toast(error.message); }),
     session.on('like', ({ n }) => {
@@ -497,6 +505,29 @@ function streamControl(act, session, _button, slide) {
     return true;
   }
   return false;
+}
+
+function voicePicker(session) {
+  const sheet = new Sheet({ title: t('voiceChanger'), className: 'lc-sheet voice-picker-sheet' });
+  const buttons = VOICE_PRESETS.map(preset => h('button', {
+    class: 'lc-action voice-preset-option', type: 'button', role: 'radio', 'data-preset': preset.id,
+    onclick: async () => {
+      try { await session.setVoicePreset(preset.id); sheet.close(); }
+      catch (error) { toast(error?.message || t('voicePresetUnavailable')); }
+    },
+  }, t(preset.key)));
+  const paint = selected => buttons.forEach(button => {
+    const active = button.dataset.preset === selected;
+    button.classList.toggle('on', active);
+    button.setAttribute('aria-checked', String(active));
+  });
+  const off = session.on('voice-preset', paint);
+  sheet.body.append(h('section', { class: 'lc-section', role: 'radiogroup', 'aria-label': t('voiceChanger') }, ...buttons));
+  paint(session.voicePreset);
+  return {
+    open() { paint(session.voicePreset); sheet.open(); },
+    destroy() { off(); sheet.root.remove(); },
+  };
 }
 
 export class LiveView {
@@ -576,6 +607,7 @@ export class LiveView {
     }
     const session = new LiveSession(live);
     this.session = session;
+    this.voicePicker = voicePicker(session);
     this.activeSlide = slide;
     resetStage(slide);
     this.unbind = connectUi(slide, session);
@@ -617,6 +649,7 @@ export class LiveView {
 
   #leave() {
     this.invite?.destroy(); this.invite = null;
+    this.voicePicker?.destroy(); this.voicePicker = null;
     this.unbind?.(); this.unbind = null;
     this.session?.leave(); this.session = null;
     this.activeSlide = null;
@@ -635,7 +668,8 @@ export class LiveView {
       }
       const button = event.target.closest('[data-act]');
       if (this.session && slide === this.activeSlide && streamControl(act, this.session, button, slide)) return;
-      if (act === 'retry') { if (slide === this.pager.slideAt(this.pager.index)) { this.#leave(); this.#join(); } }
+      if (act === 'voice') this.voicePicker?.open();
+      else if (act === 'retry') { if (slide === this.pager.slideAt(this.pager.index)) { this.#leave(); this.#join(); } }
       else if (act === 'close') this.hooks.onClose();
       else if (act === 'stage') {
         // The button is in the bar from the first frame; until the room is connected a tap just says so.
@@ -750,6 +784,7 @@ export class LiveView {
     paintLive(stage, live);
     document.body.append(stage);
     const session = new LiveSession(live, { host: true, mode });
+    const picker = voicePicker(session);
     const controls = new HostControls(session, { openProfile: person => this.hooks.openProfile(person) });
     const unbind = connectUi(stage, session);
     let finished = false;
@@ -757,6 +792,7 @@ export class LiveView {
       if (finished) return;
       finished = true;
       unbind();
+      picker.destroy();
       controls.destroy();
       await session.end().catch(() => {});
       await endSession(room).catch(() => {});
@@ -771,7 +807,8 @@ export class LiveView {
       session.resumeAudio()?.catch?.(() => {});
       if (!act) return;
       if (streamControl(act, session, button, stage)) return;
-      if (act === 'end') finish();
+      if (act === 'voice') picker.open();
+      else if (act === 'end') finish();
       else if (act === 'retry') session.reconnect().catch(error => { toast(error?.message || t('liveUnavailable')); showRetry(stage, t('liveUnavailable')); });
       else if (act === 'share') openShare({ title: live.title || 'MilkyWay LIVE', url: `${location.origin}${location.pathname.replace(/[^/]*$/, '')}#live=${encodeURIComponent(live.room)}` });
       else if (act === 'guests') controls.openGuests();

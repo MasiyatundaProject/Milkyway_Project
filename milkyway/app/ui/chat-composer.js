@@ -2,6 +2,7 @@
 import { identifyMediaFile } from '../core/media-files.js';
 import { t } from '../core/i18n.js';
 import { h, toast } from './dom.js';
+import { createVoiceEffects, VOICE_PRESETS } from './voice-effects.js';
 
 const fileInput = () => h('input', {
   class: 'chat-media-picker', type: 'file', accept: 'image/*,video/*,audio/*', tabindex: '-1', 'aria-hidden': 'true',
@@ -37,10 +38,20 @@ export class ChatComposer {
     this.recording = null;
     this.recordingStarting = false;
     this.captureGeneration = 0;
+    this.voicePreset = 'normal';
     this.input = h('textarea', { class: 'field msg-input', rows: '1', maxlength: '4000', placeholder: t('typeMessage'), 'aria-label': t('typeMessage') });
     this.picker = fileInput();
     this.attachment = this.#tool(t('attachMedia'), '＋', () => this.picker.click());
     this.voice = this.#tool(t('recordVoiceNote'), '🎙', () => this.#record('audio'));
+    this.voiceEffectButton = this.#tool(t('voiceChanger'), '♫', () => {
+      this.voicePresetSelect.hidden = !this.voicePresetSelect.hidden;
+      if (!this.voicePresetSelect.hidden) this.voicePresetSelect.focus();
+    });
+    this.voiceEffectButton.classList.add('chat-voice-changer');
+    this.voicePresetSelect = h('select', {
+      class: 'chat-voice-preset', hidden: true, 'aria-label': t('voiceChanger'),
+      onchange: () => this.#setVoicePreset(this.voicePresetSelect.value),
+    }, ...VOICE_PRESETS.map(preset => h('option', { value: preset.id }, t(preset.key))));
     this.video = h('button', {
       class: 'chat-tool chat-video-note', type: 'button', 'aria-pressed': 'false', 'aria-label': t('recordVideoNote'),
       title: t('recordVideoNote'), onclick: () => this.#record('video'),
@@ -55,7 +66,7 @@ export class ChatComposer {
     this.form = h('form', { class: 'msg-form dm-composer', onsubmit: event => { event.preventDefault(); this.#submit(); } },
       this.preview,
       h('div', { class: 'dm-composer-row' }, this.attachment, this.input,
-        h('div', { class: 'dm-composer-actions' }, this.once, this.voice, this.video), this.send),
+        h('div', { class: 'dm-composer-actions' }, this.once, this.voice, this.voiceEffectButton, this.video, this.voicePresetSelect), this.send),
       this.picker);
     this.picker.addEventListener('change', () => {
       const file = this.picker.files?.[0];
@@ -83,6 +94,22 @@ export class ChatComposer {
     this.viewOnce = !this.viewOnce;
     this.once.setAttribute('aria-pressed', String(this.viewOnce));
     this.once.classList.toggle('active', this.viewOnce);
+  }
+
+  #setVoicePreset(id) {
+    try {
+      if (id !== 'normal' && this.recording?.kind === 'audio' && !this.recording.effects) {
+        throw new Error(t('voiceEffectsUnsupported'));
+      }
+      this.recording?.effects?.setPreset(id);
+      this.voicePreset = id;
+      this.voiceEffectButton.classList.toggle('active', id !== 'normal');
+      this.voiceEffectButton.title = `${t('voiceChanger')}: ${t(VOICE_PRESETS.find(preset => preset.id === id)?.key || 'voicePresetNormal')}`;
+      this.voicePresetSelect.hidden = true;
+    } catch (error) {
+      this.voicePresetSelect.value = this.voicePreset;
+      toast(error?.message || t('voicePresetUnavailable'));
+    }
   }
 
   async #queue(file, noteType, peaks = []) {
@@ -160,6 +187,8 @@ export class ChatComposer {
     const generation = ++this.captureGeneration;
     this.recordingStarting = true;
     let stream;
+    let recordingStream;
+    let effects;
     let context;
     let sampleTimer;
     let clock;
@@ -171,8 +200,17 @@ export class ChatComposer {
         stream.getTracks().forEach(track => track.stop());
         return;
       }
+      recordingStream = stream;
+      if (kind === 'audio') {
+        try {
+          effects = createVoiceEffects(stream, this.voicePreset);
+          recordingStream = effects.stream;
+        } catch (error) {
+          if (this.voicePreset !== 'normal') throw new Error(t('voiceEffectsUnsupported'));
+        }
+      }
       const mimeType = recordingType(kind);
-      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      const recorder = new MediaRecorder(recordingStream, mimeType ? { mimeType } : undefined);
       const chunks = [];
       const peaks = [];
       let analyser, source;
@@ -181,7 +219,7 @@ export class ChatComposer {
           context = new (window.AudioContext || window.webkitAudioContext)();
           analyser = context.createAnalyser();
           analyser.fftSize = 256;
-          source = context.createMediaStreamSource(stream);
+          source = context.createMediaStreamSource(recordingStream);
           source.connect(analyser);
           const samples = new Uint8Array(analyser.fftSize);
           sampleTimer = setInterval(() => {
@@ -210,7 +248,7 @@ export class ChatComposer {
       this.preview.replaceChildren(panel);
       this.preview.hidden = false;
       this.input.hidden = true;
-      const capture = { kind, recorder, wave: preview, cancelled: false };
+      const capture = { kind, recorder, wave: preview, effects, cancelled: false };
       this.recording = capture;
       this.recordingStarting = false;
       this.voice.classList.toggle('is-recording', kind === 'audio');
@@ -231,6 +269,7 @@ export class ChatComposer {
       recorder.addEventListener('error', () => {
         capture.failed = true;
         clearInterval(clock); clearInterval(sampleTimer); stream.getTracks().forEach(track => track.stop());
+        effects?.close();
         context?.close().catch(() => {});
         if (this.recording === capture) {
           this.recording = null;
@@ -245,6 +284,7 @@ export class ChatComposer {
       recorder.addEventListener('stop', () => {
         clearInterval(clock); clearInterval(sampleTimer);
         stream.getTracks().forEach(track => track.stop());
+        effects?.close();
         context?.close().catch(() => {});
         const isCurrent = this.recording === capture;
         if (isCurrent) {
@@ -265,6 +305,7 @@ export class ChatComposer {
       clearInterval(clock);
       clearInterval(sampleTimer);
       stream?.getTracks().forEach(track => track.stop());
+      effects?.close();
       context?.close().catch(() => {});
       if (generation !== this.captureGeneration) return;
       this.recording = null;
