@@ -73,6 +73,24 @@ test('DM media notes include private one-view storage and recording controls', (
   assert.match(api, /mw_message_complete_once/);
 });
 
+test('Walkie-Talkie uses hold-to-record controls and the existing DM/group voice-note pipeline', () => {
+  const walkie = readFileSync(new URL('../milkyway/app/ui/walkie-talkie.js', import.meta.url), 'utf8');
+  const main = readFileSync(new URL('../milkyway/app/main.js', import.meta.url), 'utf8');
+  const shell = readFileSync(new URL('../milkyway/index.html', import.meta.url), 'utf8');
+  const composer = readFileSync(new URL('../milkyway/app/ui/chat-composer.js', import.meta.url), 'utf8');
+  const styles = readFileSync(new URL('../milkyway/app/app.css', import.meta.url), 'utf8');
+  assert.match(walkie, /pointerdown/);
+  assert.match(walkie, /pointerup/);
+  assert.match(walkie, /sendDirectMedia/);
+  assert.match(walkie, /sendGroupMedia/);
+  assert.match(walkie, /cancelRecording\(\)/);
+  assert.match(main, /#walkieEntry/);
+  assert.match(shell, /id="walkieEntry"/);
+  assert.match(composer, /chat-video-note/);
+  assert.match(styles, /\.dm-composer-actions \.chat-video-note \{[^}]*#c92f50/);
+  assert.match(styles, /\.walkie-talk-button/);
+});
+
 test('ordinary LiveKit token checks avoid RoomService management requests', async () => {
   const originalFetch = globalThis.fetch;
   const previousEnv = Object.fromEntries(['LIVEKIT_URL', 'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET'].map(key => [key, process.env[key]]));

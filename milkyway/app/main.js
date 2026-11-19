@@ -33,6 +33,7 @@ const giftTray = lazy(() => import('./ui/gift-tray.js').then(m => new m.GiftTray
   onTopUp: () => novaMenu().then(menu => menu.openWallet()),
 })));
 const inboxView = lazy(() => import('./ui/inbox-view.js').then(m => new m.InboxView()));
+const walkieTalkieView = lazy(() => import('./ui/walkie-talkie.js').then(m => new m.WalkieTalkieView()));
 const callView = lazy(() => import('./ui/call-view.js').then(m => m.calls));
 const novaMenu = lazy(() => import('./ui/settings-view.js').then(m => new m.NovaMenu({
   openProfilePhoto: file => {
@@ -158,10 +159,17 @@ function route() {
 addEventListener('popstate', route);
 
 document.addEventListener('click', event => {
-  const target = event.target.closest('[data-scope], [data-nav], #liveEntry, #muteToggle, #profileSearch');
+  const target = event.target.closest('[data-scope], [data-nav], #liveEntry, #walkieEntry, #muteToggle, #profileSearch');
   if (!target) return;
   if (target.dataset.scope) { if (shell.dataset.view !== 'home') showHome(); setScope(target.dataset.scope); return; }
   if (target.id === 'liveEntry') { showLive(); return; }
+  if (target.id === 'walkieEntry') {
+    if (requireLogin()) walkieTalkieView().then(view => view.open()).catch(error => {
+      console.error('[walkie-talkie] view could not be opened', error);
+      toast(error?.message || t('recordingFailed'));
+    });
+    return;
+  }
   if (target.id === 'muteToggle') { playback.setMuted(!playback.muted); return; }
   if (target.id === 'profileSearch') { profileSearch().then(view => view.open()); return; }
   const nav = target.dataset.nav;

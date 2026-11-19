@@ -41,7 +41,10 @@ export class ChatComposer {
     this.picker = fileInput();
     this.attachment = this.#tool(t('attachMedia'), '＋', () => this.picker.click());
     this.voice = this.#tool(t('recordVoiceNote'), '🎙', () => this.#record('audio'));
-    this.video = this.#tool(t('recordVideoNote'), '◉', () => this.#record('video'));
+    this.video = h('button', {
+      class: 'chat-tool chat-video-note', type: 'button', 'aria-pressed': 'false', 'aria-label': t('recordVideoNote'),
+      title: t('recordVideoNote'), onclick: () => this.#record('video'),
+    }, '◉');
     this.once = h('button', {
       class: 'chat-tool chat-view-once', type: 'button', 'aria-pressed': 'false',
       title: t('viewOnce'), 'aria-label': t('viewOnce'),
