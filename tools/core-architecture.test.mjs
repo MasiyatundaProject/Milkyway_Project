@@ -91,6 +91,30 @@ test('Walkie-Talkie uses hold-to-record controls and the existing DM/group voice
   assert.match(styles, /\.walkie-talk-button/);
 });
 
+test('Watch Together synchronizes authorized chat playback and cleans up its player', () => {
+  const watch = readFileSync(new URL('../milkyway/app/ui/watch-party.js', import.meta.url), 'utf8');
+  const direct = readFileSync(new URL('../milkyway/app/ui/inbox-view.js', import.meta.url), 'utf8');
+  const group = readFileSync(new URL('../milkyway/app/ui/group-view.js', import.meta.url), 'utf8');
+  const migration = readFileSync(new URL('../supabase/migrations/20261209_milkyway_watch_party.sql', import.meta.url), 'utf8');
+  const repair = readFileSync(new URL('../supabase/milkyway-schema-repair.sql', import.meta.url), 'utf8');
+  const worker = readFileSync(new URL('../milkyway/sw.js', import.meta.url), 'utf8');
+  assert.ok(watch.includes("`mw-watch:dm:${[auth.userId, this.roomId].sort().join(':')}`"));
+  assert.match(watch, /\.on\('broadcast', \{ event: 'watch-party' \}/);
+  assert.match(watch, /'play', 'pause', 'seek', 'sync'/);
+  assert.match(watch, /youtube-nocookie\.com\/embed/);
+  assert.match(watch, /removeChannel\(channel\)/);
+  assert.match(watch, /player\.pause\(\)[\s\S]*player\.removeAttribute\('src'\)/);
+  assert.match(direct, /watchParty\.join\('dm'/);
+  assert.match(direct, /watchableUrl\(row\.body\)/);
+  assert.match(group, /watchParty\.join\('group'/);
+  assert.match(group, /watchableUrl\(row\.body\)/);
+  assert.match(migration, /mw_watch_party_channel_access/);
+  assert.match(migration, /realtime\.messages/);
+  assert.match(migration, /mw_dm_is_group_member/);
+  assert.match(repair, /20261209_milkyway_watch_party\.sql/);
+  assert.match(worker, /ui\/watch-party\.js/);
+});
+
 test('ordinary LiveKit token checks avoid RoomService management requests', async () => {
   const originalFetch = globalThis.fetch;
   const previousEnv = Object.fromEntries(['LIVEKIT_URL', 'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET'].map(key => [key, process.env[key]]));

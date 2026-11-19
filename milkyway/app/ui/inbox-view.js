@@ -13,6 +13,7 @@ import { h, icon, ago, avatar, formatDateTime, toast } from './dom.js';
 import { calls } from './call-view.js';
 import { GroupChatSheet, GroupCreateSheet, joinAndOpenGroup } from './group-view.js';
 import { ChatComposer, mediaMessageContent } from './chat-composer.js';
+import { WatchParty, watchableUrl } from './watch-party.js';
 
 const phoneIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1L6.6 10.8z"/></svg>';
 const backIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.4 4.6 14 3.2 5.2 12l8.8 8.8 1.4-1.4L8 12z"/></svg>';
@@ -168,7 +169,7 @@ export class InboxView {
 
 class ChatSheet {
   constructor() {
-    this.sheet = new Sheet({ title: '', className: 'chat-sheet', onClose: () => { this.peer = null; this.composer.cancelRecording(); this.#clearRevealed(); } });
+    this.sheet = new Sheet({ title: '', className: 'chat-sheet', onClose: () => { this.peer = null; this.composer.cancelRecording(); this.watchParty.leave(); this.#clearRevealed(); } });
     this.sheet.heading.hidden = true;
     this.name = h('b', {});
     this.state = h('small', { class: 'muted' });
@@ -179,6 +180,7 @@ class ChatSheet {
       onSendText: (text, viewOnce) => this.#send(text, viewOnce),
       onSendMedia: media => this.#sendMedia(media),
     });
+    this.watchParty = new WatchParty();
     const iconBtn = (label, html, onclick) => h('button', { class: 'icon-btn chat-call', type: 'button', 'aria-label': label, title: label, html, onclick });
     this.sheet.body.append(
       h('header', { class: 'chat-head' },
@@ -186,7 +188,9 @@ class ChatSheet {
         this.face,
         h('div', { class: 'chat-who' }, this.name, this.state),
         iconBtn(t('audioCall'), phoneIcon, () => this.peer && calls.start(this.peer.id, 'audio')),
-        iconBtn(t('videoCall'), icon.camera, () => this.peer && calls.start(this.peer.id, 'video'))),
+        iconBtn(t('videoCall'), icon.camera, () => this.peer && calls.start(this.peer.id, 'video')),
+        iconBtn(t('watchTogether'), icon.play, () => this.watchParty.openPanel())),
+      this.watchParty.root,
       this.list, this.composer.form);
     this.messages = new Map();
     onMessage(event => this.#live(event));
@@ -195,6 +199,7 @@ class ChatSheet {
 
   open(person) {
     this.composer.cancelRecording();
+    this.watchParty.join('dm', person.id).catch(error => toast(error?.message || t('watchConnectFailed')));
     this.#clearRevealed();
     this.peer = { ...person, ...(profiles.peek(person.id) || {}), ...person };
     this.name.textContent = this.peer.name || 'MilkyWay';
@@ -240,8 +245,12 @@ class ChatSheet {
       ? mediaMessageContent({ ...row, ...revealed, view_once: false })
       : encrypted ? h('p', {}, `🔒 ${t('encrypted')}`)
         : mediaMessageContent(row, { mine, onViewOnce: row.view_once && !mine ? () => this.#viewOnce(row) : undefined });
+    const sharedUrl = encrypted ? '' : watchableUrl(row.body)
+      || (row.message_type !== 'video_note' && (row.message_type === 'video' || row.media_type?.startsWith('video/'))
+        ? watchableUrl(row.media_url) : '');
     const bubble = h('div', { class: `msg${mine ? ' mine' : ''}${row.pending ? ' pending' : ''}${row.failed ? ' failed' : ''}`, 'data-id': row.id },
       content,
+      sharedUrl ? h('button', { class: 'pill-btn watch-message-action', type: 'button', onclick: () => this.watchParty.startFromLink(sharedUrl) }, t('watchTogether')) : null,
       h('small', {}, formatDateTime(row.created_at, { hour: '2-digit', minute: '2-digit' }), row.edited_at ? ` · ${t('edited')}` : '',
         mine && last && row.read_at ? ` · ${t('seen')}` : '', row.failed ? ` · ${t('messageFailed')}` : ''));
     if (!row.pending && !row.failed) {

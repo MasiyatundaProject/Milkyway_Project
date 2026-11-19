@@ -10,8 +10,9 @@ import {
 import { consumeViewOnce } from '../data/chat-media.js';
 import { t } from '../core/i18n.js';
 import { Sheet } from './sheet.js';
-import { avatar, formatDateTime, h, toast } from './dom.js';
+import { avatar, formatDateTime, h, icon, toast } from './dom.js';
 import { ChatComposer, mediaMessageContent } from './chat-composer.js';
+import { WatchParty, watchableUrl } from './watch-party.js';
 
 const backIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.4 4.6 14 3.2 5.2 12l8.8 8.8 1.4-1.4L8 12z"/></svg>';
 const gearIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13a7.7 7.7 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L14.9 3h-4l-.4 2.9a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.4 11a7.7 7.7 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.8 1.7 1l.4 2.9h4l.4-2.9c.6-.2 1.2-.6 1.7-1l2.5 1 2-3.5zM12.9 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/></svg>';
@@ -74,7 +75,7 @@ export class GroupChatSheet {
     this.group = null;
     this.messages = new Map();
     this.revealed = new Map();
-    this.sheet = new Sheet({ title: '', className: 'chat-sheet group-chat-sheet', onClose: () => { this.group = null; this.composer.cancelRecording(); this.#clearRevealed(); } });
+    this.sheet = new Sheet({ title: '', className: 'chat-sheet group-chat-sheet', onClose: () => { this.group = null; this.composer.cancelRecording(); this.watchParty.leave(); this.#clearRevealed(); } });
     this.sheet.heading.hidden = true;
     this.name = h('b', {});
     this.subtitle = h('small', { class: 'muted' });
@@ -84,12 +85,14 @@ export class GroupChatSheet {
       onSendText: (text, viewOnce) => this.#send(text, viewOnce),
       onSendMedia: media => this.#sendMedia(media),
     });
+    this.watchParty = new WatchParty();
     this.sheet.body.append(
       h('header', { class: 'chat-head' },
         h('button', { class: 'icon-btn chat-call', type: 'button', 'aria-label': t('back'), html: backIcon, onclick: () => this.sheet.close() }),
         this.face, h('div', { class: 'chat-who' }, this.name, this.subtitle),
+        h('button', { class: 'icon-btn chat-call', type: 'button', 'aria-label': t('watchTogether'), title: t('watchTogether'), html: icon.play, onclick: () => this.watchParty.openPanel() }),
         h('button', { class: 'icon-btn chat-call', type: 'button', 'aria-label': t('groupManage'), html: gearIcon, onclick: () => this.manager.open(this.group) })),
-      this.list, this.composer.form);
+      this.watchParty.root, this.list, this.composer.form);
     this.manager = new GroupManager({ onChanged: this.onChanged, onLeave: () => this.sheet.close() });
     onGroupMessage(event => this.#live(event));
   }
@@ -97,6 +100,7 @@ export class GroupChatSheet {
   async open(group) {
     if (!group?.id) return;
     this.composer.cancelRecording();
+    this.watchParty.join('group', group.id).catch(error => toast(error?.message || t('watchConnectFailed')));
     this.#clearRevealed();
     this.group = group;
     this.messages.clear();
@@ -132,9 +136,13 @@ export class GroupChatSheet {
       const content = revealed
         ? mediaMessageContent({ ...row, ...revealed, view_once: false })
         : mediaMessageContent(row, { mine, onViewOnce: row.view_once && !mine ? () => this.#viewOnce(row) : undefined });
+      const sharedUrl = watchableUrl(row.body)
+        || (row.message_type !== 'video_note' && (row.message_type === 'video' || row.media_type?.startsWith('video/'))
+          ? watchableUrl(row.media_url) : '');
       return h('div', { class: `msg${mine ? ' mine' : ''}`, 'data-id': row.id },
         !mine ? h('small', { class: 'group-message-sender' }, profile?.name || 'MilkyWay') : null,
         content,
+        sharedUrl ? h('button', { class: 'pill-btn watch-message-action', type: 'button', onclick: () => this.watchParty.startFromLink(sharedUrl) }, t('watchTogether')) : null,
         h('small', {}, formatDateTime(row.created_at, { hour: '2-digit', minute: '2-digit' }), row.edited_at ? ` · ${t('edited')}` : ''));
     }));
     requestAnimationFrame(() => { this.list.scrollTop = this.list.scrollHeight; });

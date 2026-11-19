@@ -838,6 +838,16 @@ html[data-low-end] .create-orb, html[data-low-end] .gift-card, html[data-low-end
 .chat-who { flex: 1; min-width: 0; display: grid; }
 .chat-who b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-call { color: var(--accent-2); }
+.watch-party { flex: none; display: grid; gap: 8px; max-height: 48dvh; overflow-y: auto; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.watch-party[hidden], .watch-party-player[hidden] { display: none; }
+.watch-party-top { display: flex; align-items: center; gap: 8px; }
+.watch-party-status { flex: 1; min-width: 0; margin: 0; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.watch-party-top .pill-btn, .watch-party-form .pill-btn { flex: none; min-height: 36px; padding: 6px 11px; font-size: 12px; }
+.watch-party-form { display: flex; align-items: center; gap: 8px; }
+.watch-party-url { min-width: 0; height: 40px; }
+.watch-party-player { overflow: hidden; border-radius: 12px; background: #000; }
+.watch-party-media, .watch-party-youtube, .watch-party-youtube iframe { display: block; width: 100%; aspect-ratio: 16 / 9; max-height: 40dvh; border: 0; background: #000; }
+.watch-message-action { min-height: 32px; margin-top: 6px; padding: 5px 10px; font-size: 12px; }
 .msg-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 6px; padding: 12px 2px; }
 .msg-empty { margin: auto; }
 .msg { align-self: flex-start; max-width: 78%; padding: 8px 12px; border-radius: 16px 16px 16px 4px; background: var(--panel-2); border: 1px solid var(--line); }
