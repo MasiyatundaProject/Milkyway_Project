@@ -5,7 +5,7 @@
 //
 // The caller connects to the LiveKit room while it rings, so audio/video flows the moment the other side accepts.
 import { config } from '../config.js';
-import { api, auth, supabase, accessToken } from '../core/net.js';
+import { api, auth, supabase } from '../core/net.js';
 import { bus } from '../core/events.js';
 import { loadLiveKit } from '../core/sdk.js';
 import { assertRoomAccess } from '../core/livekit-access.js';
@@ -16,45 +16,14 @@ import { playback } from './playback.js';
 
 const CALL_API = `${config.api.base}/milkyway-call`;
 
-// Call token straight from the Supabase livekit-token function (used when LiveKit refused the site-signed token).
-async function directCallToken(roomName, name) {
-  const token = await accessToken();
-  const response = await fetch(config.livekit.directTokenEndpoint, {
-    method: 'POST', signal: AbortSignal.timeout(12000), body: JSON.stringify({ roomName, room: roomName, action: 'token', name }),
-    headers: { 'Content-Type': 'application/json', apikey: config.supabase.anonKey, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-  });
-  const data = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw Object.assign(new Error(data?.error || t('callFailed')), {
-      status: response.status,
-      code: data?.code || data?.reason,
-    });
-  }
-  return assertRoomAccess(data, roomName);
-}
 const callErrorText = error => [
   error?.message, error?.reason, error?.code, error?.cause?.message, error?.cause?.code,
 ].filter(value => value != null).join(' ');
 const isUsageLimitError = error => [402, 429].includes(error?.status)
   || /quota|resource[\s_-]*exhausted|rate.?limit|usage limit|limit reached|too many requests/i.test(callErrorText(error));
 async function callAccessToken(roomName, callId, name) {
-  let gatewayError;
-  let gatewayServerUrl = '';
-  try {
-    const access = await callApi('token', { id: callId, name });
-    gatewayServerUrl = access?.serverUrl || '';
-    return assertRoomAccess(access, roomName);
-  } catch (error) {
-    gatewayError = error;
-    if ([401, 403, 404, 409].includes(error?.status)) throw error;
-  }
-  try {
-    const access = await directCallToken(roomName, name);
-    return assertRoomAccess(access, roomName, gatewayServerUrl);
-  } catch (error) {
-    if (error?.message && error.message !== t('callFailed')) throw error;
-    throw gatewayError || error;
-  }
+  const access = await callApi('token', { id: callId, name });
+  return assertRoomAccess(access, roomName);
 }
 const RING_MS = 55_000;
 const callApi = (action, body) => api(`${CALL_API}?action=${action}`, body ? { method: 'POST', body, timeout: 15000 } : { timeout: 12000 });
@@ -94,6 +63,9 @@ class CallScreen {
     this.local = h('div', { class: 'call-local' });
     this.status = h('span', { class: 'call-status', role: 'status', 'aria-live': 'polite' });
     this.errorMessage = h('p', { class: 'call-error', role: 'alert', hidden: true });
+    this.playAudioBtn = h('button', {
+      class: 'pill-btn call-audio-playback', type: 'button', hidden: true, onclick: () => this.#enableRemoteAudio(),
+    }, t('tapForSound'));
     this.retryBtn = h('button', {
       class: 'pill-btn call-retry', type: 'button', hidden: true, onclick: () => this.#connect(),
     }, t('retry'));
@@ -110,7 +82,7 @@ class CallScreen {
       h('button', { class: 'call-btn accept', type: 'button', 'aria-label': t('accept'), html: this.mode === 'video' ? icon.camera : icons.phone, onclick: () => this.#accept() }));
     this.root = h('div', { class: 'call-layer', role: 'dialog', 'aria-modal': 'true', 'aria-label': this.mode === 'video' ? t('videoCall') : t('audioCall'), 'data-mode': this.mode },
       this.remote, this.local,
-      h('div', { class: 'call-info' }, avatar(person, 104), h('b', { class: 'call-name' }, person.name), this.status, this.errorMessage, this.retryBtn),
+      h('div', { class: 'call-info' }, avatar(person, 104), h('b', { class: 'call-name' }, person.name), this.status, this.playAudioBtn, this.errorMessage, this.retryBtn),
       this.controls, this.answer, this.audioBox);
     document.body.append(this.root);
     requestAnimationFrame(() => this.root.classList.add('open'));
@@ -148,7 +120,7 @@ class CallScreen {
     this.errorMessage.hidden = true;
     this.#setState('connecting');
     try {
-      const roomName = `mw-conversation-${this.mode === 'video' ? 'video' : 'audio'}-${this.call.id}`;
+      const roomName = `dm-call-${[this.call.caller_id, this.call.callee_id].map(id => id.toLowerCase()).sort().join('-')}`;
       const [sdk, access] = await Promise.all([loadLiveKit(), callAccessToken(roomName, this.call.id, auth.name)]);
       if (this.closed) return;
       assertRoomAccess(access, roomName);
@@ -177,20 +149,12 @@ class CallScreen {
         .on(RoomEvent.LocalTrackPublished, publication => {
           if (publication.track?.kind === 'video') { this.local.replaceChildren(publication.track.attach()); }
         });
-      try { await room.connect(access.serverUrl, access.token, { autoSubscribe: true }); }
-      catch (error) {
-        // A gateway can have stale credentials or hit a route limit; try the separately configured Supabase issuer.
-        if (this.closed || (!isUsageLimitError(error) && !/api key|signal connection|unauthori[sz]ed|\b401\b/i.test(String(error?.message || '')))) throw error;
-        const retry = await directCallToken(roomName, auth.name);
-        if (this.closed) return;
-        assertRoomAccess(retry, roomName, access.serverUrl);
-        await room.connect(retry.serverUrl, retry.token, { autoSubscribe: true });
-      }
+      await room.connect(access.serverUrl, access.token, { autoSubscribe: true });
       this.roomConnected = true;
-      if (this.closed) { room.disconnect(); return; }
+      if (this.closed) { this.#disconnectRoom(); return; }
       try {
-        await room.localParticipant.setMicrophoneEnabled(true);
-        if (this.mode === 'video') await room.localParticipant.setCameraEnabled(true, { facingMode: this.facing });
+        await room.localParticipant.setMicrophoneEnabled(this.micOn);
+        if (this.mode === 'video') await room.localParticipant.setCameraEnabled(this.camOn, { facingMode: this.facing });
       } catch { toast(t('micNeeded')); }
       if (room.remoteParticipants.size) this.#peerJoined();
       room.remoteParticipants.forEach(participant => participant.trackPublications.forEach(publication => publication.track && this.#attachRemote(publication.track, Track)));
@@ -220,10 +184,31 @@ class CallScreen {
     this.errorMessage.hidden = false;
     this.retryBtn.hidden = false;
     toast(message);
+    this.#disconnectRoom();
+  }
+
+  #disconnectRoom() {
     const room = this.room;
     this.room = null;
     this.roomConnected = false;
-    try { room?.removeAllListeners?.(); room?.disconnect(); } catch {}
+    if (room) {
+      try { room.removeAllListeners?.(); }
+      catch (error) { console.warn('[call] listener cleanup failed', error); }
+      try {
+        for (const participant of [room.localParticipant, ...room.remoteParticipants.values()]) {
+          for (const publication of participant.trackPublications.values()) {
+            publication.track?.detach().forEach(element => element.remove());
+          }
+        }
+      } catch (error) { console.warn('[call] track cleanup failed', error); }
+      try { Promise.resolve(room.disconnect()).catch(error => console.warn('[call] LiveKit disconnect failed', error)); }
+      catch (error) { console.warn('[call] LiveKit disconnect failed', error); }
+    }
+    this.audioBox.replaceChildren();
+    this.playAudioBtn.hidden = true;
+    this.remote.replaceChildren();
+    this.local.replaceChildren();
+    this.root.classList.remove('has-video');
   }
 
   #peerJoined() {
@@ -233,10 +218,22 @@ class CallScreen {
 
   #attachRemote(track, Track) {
     const element = track.attach();
-    if (track.kind === Track.Kind.Audio) { this.audioBox.append(element); element.play?.().catch(() => {}); return; }
+    if (track.kind === Track.Kind.Audio) {
+      this.audioBox.append(element);
+      element.play().then(() => { if (!this.closed) this.playAudioBtn.hidden = true; })
+        .catch(() => { if (!this.closed) this.playAudioBtn.hidden = false; });
+      return;
+    }
     element.playsInline = true;
     this.remote.replaceChildren(element);
     this.root.classList.add('has-video');
+  }
+
+  async #enableRemoteAudio() {
+    try {
+      await Promise.all([...this.audioBox.querySelectorAll('audio')].map(element => element.play()));
+      this.playAudioBtn.hidden = true;
+    } catch (error) { toast(error?.message || t('callFailed')); }
   }
 
   async #accept() {
@@ -277,24 +274,32 @@ class CallScreen {
   }
 
   async #toggleMic() {
-    this.micOn = !this.micOn;
-    await this.room?.localParticipant.setMicrophoneEnabled(this.micOn).catch(() => {});
+    const enabled = !this.micOn;
+    try { await this.room?.localParticipant.setMicrophoneEnabled(enabled); }
+    catch (error) { toast(error?.message || t('callFailed')); return; }
+    this.micOn = enabled;
     this.micBtn.classList.toggle('off', !this.micOn);
     this.micBtn.innerHTML = this.micOn ? icon.mic : icons.micOff;
   }
 
   async #toggleCam() {
-    this.camOn = !this.camOn;
-    await this.room?.localParticipant.setCameraEnabled(this.camOn, { facingMode: this.facing }).catch(() => {});
+    const enabled = !this.camOn;
+    try { await this.room?.localParticipant.setCameraEnabled(enabled, { facingMode: this.facing }); }
+    catch (error) { toast(error?.message || t('callFailed')); return; }
+    this.camOn = enabled;
     this.camBtn.classList.toggle('off', !this.camOn);
     this.camBtn.innerHTML = this.camOn ? icon.camera : icons.camOff;
     this.local.hidden = !this.camOn;
   }
 
   async #flip() {
-    this.facing = this.facing === 'user' ? 'environment' : 'user';
+    const facing = this.facing === 'user' ? 'environment' : 'user';
     const publication = [...(this.room?.localParticipant.videoTrackPublications?.values() || [])][0];
-    try { await publication?.track?.restartTrack({ facingMode: this.facing }); } catch {}
+    if (!publication?.track) return;
+    try {
+      await publication.track.restartTrack({ facingMode: facing });
+      this.facing = facing;
+    } catch (error) { toast(error?.message || t('callFailed')); }
   }
 
   hangUp(outcome = 'ended') {
@@ -308,8 +313,7 @@ class CallScreen {
     this.closed = true;
     navigator.vibrate?.(0);
     clearTimeout(this.ringTimer); clearInterval(this.poll); clearInterval(this.clock);
-    const room = this.room; this.room = null;
-    try { room?.removeAllListeners?.(); room?.disconnect(); } catch {}
+    this.#disconnectRoom();
     this.#setState(state);
     this.root.classList.add('closing');
     setTimeout(() => { this.root.remove(); playback.suspend(false); }, 1400);

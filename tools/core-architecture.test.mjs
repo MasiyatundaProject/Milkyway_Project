@@ -612,24 +612,35 @@ test('LIVE room UPSERT targets have unique indexes after duplicate rows are reco
   assert.match(migration, /notify pgrst, 'reload schema'/i);
 });
 
-test('DM call connection validates token endpoints and offers an in-call retry on LiveKit errors', () => {
+test('DM call connection uses authenticated LiveKit tokens and reports server configuration failures', () => {
   const callView = readFileSync(new URL('../milkyway/app/ui/call-view.js', import.meta.url), 'utf8');
   const liveKit = readFileSync(new URL('../api/_lib/livekit.js', import.meta.url), 'utf8');
   const callApi = readFileSync(new URL('../api/milkyway-call.js', import.meta.url), 'utf8');
   const translations = readFileSync(new URL('../milkyway/app/core/i18n.js', import.meta.url), 'utf8');
-  assert.match(callApi, /livekitUsable\(\)/);
+  assert.match(callApi, /if \(!livekitConfigured\(\)\)/);
+  assert.match(callApi, /if \(!await livekitUsable\(\)\)/);
+  assert.doesNotMatch(callApi, /functions\/v1\/livekit-token/);
   assert.match(callApi, /serverUrl:\s*livekitUrl\(\)/);
+  assert.match(callApi, /const dmRoomName = call => `dm-call-/);
+  assert.match(callApi, /const roomName = dmRoomName\(call\)/);
   assert.match(liveKit, /LIVEKIT_URL.*LIVEKIT_API_KEY.*LIVEKIT_API_SECRET/);
   assert.match(liveKit, /const validLivekitUrl = \(\) =>/);
   assert.match(liveKit, /url\.pathname === '\/'.*!url\.username/);
   assert.match(callView, /callAccessToken\(roomName, this\.call\.id, auth\.name\)/);
-  assert.match(callView, /directCallToken\(roomName, auth\.name\)/);
+  assert.doesNotMatch(callView, /await directCallToken/);
+  assert.doesNotMatch(callView, /directTokenEndpoint|directCallToken/);
+  assert.match(callView, /await room\.connect\(access\.serverUrl, access\.token/);
+  assert.match(callView, /setMicrophoneEnabled\(this\.micOn\)/);
+  assert.match(callView, /setCameraEnabled\(this\.camOn/);
+  assert.match(callView, /publication\.track\?\.detach\(\)/);
+  assert.match(callView, /room\.disconnect\(\)/);
+  assert.match(callView, /playAudioBtn/);
+  assert.match(callView, /#enableRemoteAudio/);
   assert.match(callView, /assertRoomAccess/);
   assert.match(callView, /isUsageLimitError/);
   assert.match(callView, /LiveKit usage limit reached/);
-  assert.match(callView, /if \(this\.closed \|\| \(!isUsageLimitError\(error\)/);
   assert.doesNotMatch(callView, /if \(isUsageLimitError\(error\)\) throw error/);
-  assert.match(callView, /const access = await callApi\('token', \{ id: callId, name \}\)[\s\S]*?const access = await directCallToken\(roomName, name\)/);
+  assert.match(callView, /const access = await callApi\('token', \{ id: callId, name \}\)/);
   assert.match(callView, /this\.retryBtn\.hidden = false/);
   assert.doesNotMatch(callView, /this\.hangUp\('disconnected'\)/);
   assert.match(callView, /callServiceLimited/);
@@ -705,6 +716,7 @@ test('compose upload normalizes MIME type and reports storage transport errors w
 test('DM room cleanup RPC is installed and token issuance avoids cleanup management calls', () => {
   const cleanupMigration = readFileSync(new URL('../supabase/migrations/20261127_milkyway_room_cleanup_enqueue_schema_cache.sql', import.meta.url), 'utf8');
   const cleanupRepair = readFileSync(new URL('../supabase/migrations/20261128_milkyway_room_cleanup_enqueue_repair.sql', import.meta.url), 'utf8');
+  const dmRoomsMigration = readFileSync(new URL('../supabase/migrations/20261213_milkyway_dm_livekit_rooms.sql', import.meta.url), 'utf8');
   const repair = readFileSync(new URL('../supabase/milkyway-schema-repair.sql', import.meta.url), 'utf8');
   const callApi = readFileSync(new URL('../api/milkyway-call.js', import.meta.url), 'utf8');
   const livekit = readFileSync(new URL('../api/_lib/livekit.js', import.meta.url), 'utf8');
@@ -714,9 +726,13 @@ test('DM room cleanup RPC is installed and token issuance avoids cleanup managem
   assert.match(cleanupRepair, /create or replace function public\.mw_room_cleanup_enqueue\(p_room_name text\)/i);
   assert.match(cleanupRepair, /notify pgrst, 'reload schema'/i);
   assert.match(repair, /create or replace function public\.mw_room_cleanup_enqueue\(p_room_name text\)/i);
+  assert.match(dmRoomsMigration, /dm-call-\[a-f0-9\]/);
+  assert.match(dmRoomsMigration, /room_users\[1\]::uuid < room_users\[2\]::uuid/);
+  assert.match(repair, /supabase\/migrations\/20261213_milkyway_dm_livekit_rooms\.sql/);
+  assert.match(repair, /room_users\[1\]::uuid < room_users\[2\]::uuid/);
   assert.doesNotMatch(callApi, /retryRoomCleanups/);
   assert.match(callApi, /closeRoom\(ctx, oldRoom, \{ immediate: false \}\)/);
-  assert.match(callApi, /closeRoom\(ctx, `mw-conversation-[\s\S]*?\{ immediate: false \}\)/);
+  assert.match(callApi, /closeRoom\(ctx, dmRoomName\(call\), \{ immediate: false \}\)/);
   assert.match(livekit, /if \(!immediate\) return false/);
 });
 
