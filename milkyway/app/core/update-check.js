@@ -36,6 +36,11 @@ function showUpdateNotice(buildId) {
 
 function registerWorker(deploymentId) {
   if (!('serviceWorker' in navigator)) return;
+  if (typeof navigator.storage?.persist === 'function') {
+    navigator.storage.persist().then(persisted => {
+      if (!persisted) console.info('[offline-cache] browser did not grant persistent storage; cached content may be evicted');
+    }).catch(error => console.warn('[offline-cache] persistent storage request failed', error));
+  }
   const hadController = Boolean(navigator.serviceWorker.controller);
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (!hadController) return;

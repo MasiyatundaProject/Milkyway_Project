@@ -1,14 +1,12 @@
 // Shared caching for the site and MilkyWay service workers (loaded with importScripts).
 // Pages and static assets: shown straight from the saved copy and refreshed quietly in the background.
-// Pictures that were never saved show as a blank tile while offline.
+// Viewed pictures stay in Cache Storage for offline use, including cross-origin opaque responses.
 // When a page arrives from the network with new content (a new deploy), its scripts and styles are fetched
 // fresh for a short window so a new page never runs with old code.
 // Never cached here: non-GET requests, signed-in API calls, functions, uploads, video ranges and app downloads.
 // (Saved feed videos are played from the device by the MilkyWay worker; the feed itself lives in IndexedDB.)
 (() => {
   const PAGE_TIMEOUT = 3500;
-  const IMAGE_LIMIT = 400;
-  const IMAGE_MAX_BYTES = 3 * 1024 * 1024;
   const IMAGE_MAX_AGE = 24 * 60 * 60 * 1000;
   const CDN_HOSTS = ['cdn.jsdelivr.net', 'unpkg.com', 'fonts.googleapis.com', 'fonts.gstatic.com'];
   const STATIC = /(?:\.(?:html?|json|js|css|svg|png|jpe?g|webp|avif|gif|ico|woff2?|ttf|otf|webmanifest)|\/manifest\.json)$/i;
@@ -42,12 +40,6 @@
       if (!response || !(response.ok || response.type === 'opaque')) return Promise.resolve();
       return caches.open(name).then(cache => cache.put(key, response)).catch(() => {});
     };
-    const trim = async (name, limit) => {
-      const cache = await caches.open(name);
-      const keys = await cache.keys();
-      await Promise.all(keys.slice(0, Math.max(0, keys.length - limit)).map(key => cache.delete(key)));
-    };
-
     async function page(event) {
       const request = event.request;
       const key = keyFor(request).replace(/\?.*$/, '');
@@ -124,18 +116,24 @@
       const cache = await caches.open(images);
       const saved = await cache.match(request);
       const refresh = () => fetch(request).then(async response => {
-        if (response.ok) {
-          const headers = new Headers(response.headers);
-          headers.set('x-mw-saved-at', String(Date.now()));
-          const body = await response.clone().blob();
-          if (body.size > IMAGE_MAX_BYTES) return response;
-          await cache.put(request, new Response(body, { status: response.status, statusText: response.statusText, headers }));
-          await trim(images, IMAGE_LIMIT);
+        if (response.ok || response.type === 'opaque') {
+          try {
+            if (response.type === 'opaque') {
+              await cache.put(request, response.clone());
+            } else {
+              const copy = response.clone();
+              const headers = new Headers(copy.headers);
+              headers.set('x-mw-saved-at', String(Date.now()));
+              await cache.put(request, new Response(copy.body, { status: copy.status, statusText: copy.statusText, headers }));
+            }
+          } catch (error) {
+            console.warn('[offline-cache] image could not be persisted', error);
+          }
         }
         return response;
       });
       if (!saved) return refresh().catch(async () => (await anySize(cache, request)) || placeholder());
-      if (Date.now() - Number(saved.headers.get('x-mw-saved-at') || 0) > IMAGE_MAX_AGE) keep(event, refresh().catch(() => {}));
+      if (saved.type !== 'opaque' && Date.now() - Number(saved.headers.get('x-mw-saved-at') || 0) > IMAGE_MAX_AGE) keep(event, refresh().catch(() => {}));
       return saved;
     }
 

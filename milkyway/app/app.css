@@ -55,7 +55,7 @@ html[data-view="explore"] .topbar { display: none; }
 .icon-btn { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 50%; font-size: 22px; }
 .walkie-entry { grid-column: 3; width: 62px; height: 48px; border-radius: 8px; grid-template-rows: 28px 13px; gap: 1px; color: #ff6b85; }
 .walkie-entry svg { width: 22px; height: 22px; }
-.walkie-label { max-width: 58px; font-size: 8.5px; line-height: 11px; font-weight: 800; white-space: nowrap; color: currentColor; text-align: center; }
+.walkie-label { max-width: 60px; font-size: 9px; line-height: 11px; font-weight: 800; white-space: nowrap; color: currentColor; text-align: center; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
 .walkie-entry.hide-label .walkie-label { display: none; }
 .mute-toggle { justify-self: end; grid-column: 4; }
 .profile-search { justify-self: end; grid-column: 5; }

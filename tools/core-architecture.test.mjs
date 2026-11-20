@@ -24,6 +24,7 @@ test('group management schema and UI implement guarded joins, invitations and co
   const view = readFileSync(new URL('../milkyway/app/ui/group-view.js', import.meta.url), 'utf8');
   const data = readFileSync(new URL('../milkyway/app/data/groups.js', import.meta.url), 'utf8');
   assert.match(migration, /join_mode in \('open', 'request_approval', 'invite_only'\)/);
+  assert.match(migration, /add column if not exists avatar_url text not null default ''/);
   assert.match(migration, /role in \('admin', 'co_admin', 'member'\)/);
   assert.match(migration, /members_can_invite/);
   assert.match(migration, /mw_group_join_request_decide/);
@@ -42,6 +43,8 @@ test('group management schema and UI implement guarded joins, invitations and co
   assert.match(view, /decideGroupRequest/);
   assert.match(view, /sendGroupMessage/);
   assert.match(data, /mw_dm_group_messages/);
+  assert.match(api, /missingGroupAvatarColumn/);
+  assert.match(api, /mw_dm_groups\(id,name,caption,join_mode,created_at\)/);
 });
 
 test('DM media notes include private one-view storage and recording controls', () => {
@@ -86,8 +89,11 @@ test('Walkie-Talkie uses hold-to-record controls and the existing DM/group voice
   assert.match(walkie, /cancelRecording\(\)/);
   assert.match(main, /#walkieEntry/);
   assert.match(shell, /id="walkieEntry"/);
+  assert.match(shell, /class="walkie-label"[^>]*>Walkie-Talkie<\/span>/);
   assert.match(composer, /chat-video-note/);
   assert.match(styles, /\.dm-composer-actions \.chat-video-note \{[^}]*#c92f50/);
+  assert.match(styles, /\.walkie-label \{[^}]*font-size: 9px/);
+  assert.match(styles, /\.walkie-entry\.hide-label \.walkie-label \{ display: none; \}/);
   assert.match(styles, /\.walkie-talk-button/);
 });
 
@@ -223,6 +229,43 @@ test('group creation API validates join mode and delegates creation to the secur
       body: JSON.stringify({ name: 'Community', joinMode: 'automatic' }),
     }));
     assert.equal(invalid.status, 400);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('group list keeps Walkie-Talkie conversations available when avatar_url is missing', async () => {
+  const originalFetch = globalThis.fetch;
+  const urls = [];
+  globalThis.fetch = async input => {
+    const url = String(input);
+    urls.push(url);
+    if (url.includes('/auth/v1/user')) return new Response(JSON.stringify({ id: A }), { status: 200 });
+    if (url.includes('/rest/v1/mw_dm_group_members?')) {
+      if (url.includes('avatar_url')) {
+        return new Response(JSON.stringify({
+          code: '42703',
+          message: 'column mw_dm_groups_1.avatar_url does not exist',
+        }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify([{
+        role: 'member',
+        join_status: 'active',
+        mw_dm_groups: { id: P(97), name: 'Community', caption: '', join_mode: 'invite_only' },
+      }]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  };
+  try {
+    const response = await runApi('milkyway-groups', new Request('https://www.masiyatunda.com/api/milkyway-groups?action=list', {
+      headers: { authorization: 'Bearer test-token' },
+    }));
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.groups[0].name, 'Community');
+    assert.equal(result.groups[0].avatar_url, '');
+    const groupQueries = urls.filter(url => url.includes('/rest/v1/mw_dm_group_members?'));
+    assert.equal(groupQueries.length, 2);
+    assert.match(groupQueries[0], /avatar_url/);
+    assert.doesNotMatch(groupQueries[1], /avatar_url/);
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -1243,6 +1286,7 @@ test('media uploads compress asynchronously and feed media is cached progressive
   const feed = readFileSync(new URL('../milkyway/app/ui/feed-view.js', import.meta.url), 'utf8');
   const viewer = readFileSync(new URL('../milkyway/app/ui/post-viewer.js', import.meta.url), 'utf8');
   const cache = readFileSync(new URL('../sw-cache.js', import.meta.url), 'utf8');
+  const updater = readFileSync(new URL('../milkyway/app/core/update-check.js', import.meta.url), 'utf8');
   assert.match(optimizer, /new Worker\(new URL\('\.\/media-worker\.js'/);
   assert.match(optimizer, /export async function optimizeVideo/);
   assert.match(optimizer, /videoBitsPerSecond:\s*1_500_000/);
@@ -1253,8 +1297,11 @@ test('media uploads compress asynchronously and feed media is cached progressive
   assert.match(feed, /r\.img\.loading = index === this\.pager\.index \? 'eager' : 'lazy'/);
   assert.match(viewer, /photoPreviewItems\(post\)\[index\]/);
   assert.match(viewer, /device\.saveData \? 0 : device\.slowNetwork \? 1 : 2/);
-  assert.match(cache, /IMAGE_MAX_BYTES/);
+  assert.match(cache, /response\.ok \|\| response\.type === 'opaque'/);
+  assert.match(cache, /cache\.put\(request, response\.clone\(\)\)/);
+  assert.doesNotMatch(cache, /IMAGE_LIMIT|IMAGE_MAX_BYTES/);
   assert.match(cache, /address\.pathname\.startsWith\('\/storage\/v1\/object\/public\/portfolio\/'\)/);
+  assert.match(updater, /navigator\.storage\?\.persist/);
 });
 
 test('provider keys are configured in one place', () => {
