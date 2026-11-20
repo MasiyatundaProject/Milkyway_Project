@@ -14,7 +14,7 @@
 <!-- Connections are opened early; nothing here blocks rendering. -->
 <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
 <link rel="stylesheet" href="splash.css?v=1"><link rel="preload" as="image" href="brand/milkyway-splash.webp" fetchpriority="high"><script type="module">try{if(sessionStorage.getItem("mw_splash_seen"))document.documentElement.setAttribute("data-splash-seen","")}catch(e){}</script>
-<link rel="stylesheet" href="app/app.css?v=29">
+<link rel="stylesheet" href="app/app.css?v=30">
 <link rel="modulepreload" href="app/main.js">
 <link rel="modulepreload" href="app/config.js">
 <link rel="modulepreload" href="app/core/store.js">
@@ -38,10 +38,6 @@
     <button type="button" role="tab" data-scope="following" aria-selected="false" data-i18n="following">Following</button>
     <button type="button" role="tab" data-scope="foryou" aria-selected="true" data-i18n="forYou">For You</button>
   </nav>
-  <div class="auth-entry" aria-label="Account access">
-    <button class="auth-entry-signin" type="button" data-auth-entry="signin" data-i18n="signIn">Sign in</button>
-    <button class="auth-entry-signup" type="button" data-auth-entry="signup" data-i18n="signUp">Sign up</button>
-  </div>
   <button id="walkieEntry" class="icon-btn walkie-entry" type="button" aria-label="Walkie-Talkie" title="Walkie-Talkie">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.93V21h2v-3.07A7 7 0 0 0 19 11z"/></svg>
     <span class="walkie-label" data-i18n="walkieTalkie">Walkie-Talkie</span>

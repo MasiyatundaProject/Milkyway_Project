@@ -892,9 +892,9 @@ test('LIVE hidden-tab lifecycle rests viewers, keeps audio during grace, and end
   assert.match(liveView, /removeEventListener\('visibilitychange', onHostVisibility\)/);
   assert.match(css, /\.live-resting-art svg/);
   assert.match(css, /--mw-live-rest-image/);
-  assert.match(index, /app\/app\.css\?v=29/);
-  assert.match(worker, /milkyway-v240-live-rest-lifecycle/);
-  assert.match(worker, /app\/app\.css\?v=29/);
+  assert.match(index, /app\/app\.css\?v=30/);
+  assert.match(worker, /milkyway-v241-guest-view-only/);
+  assert.match(worker, /app\/app\.css\?v=30/);
 });
 
 test('LIVE settings persist guest slots and featured host backgrounds with schema repair', async () => {
@@ -1342,11 +1342,13 @@ test('public Supabase content uses DOM text nodes and validates media URLs', () 
   assert.match(moderation, /textContent/);
 });
 
-test('registration, privacy policy and account deletion request are wired', () => {
+test('registration prompts on protected actions without persistent guest feed buttons', () => {
   const auth = readFileSync(new URL('../milkyway/app/ui/auth-sheet.js', import.meta.url), 'utf8');
   const shell = readFileSync(new URL('../milkyway/index.html', import.meta.url), 'utf8');
   const authCss = readFileSync(new URL('../milkyway/app/app.css', import.meta.url), 'utf8');
   const main = readFileSync(new URL('../milkyway/app/main.js', import.meta.url), 'utf8');
+  const feed = readFileSync(new URL('../milkyway/app/ui/feed-view.js', import.meta.url), 'utf8');
+  const comments = readFileSync(new URL('../milkyway/app/ui/comments-sheet.js', import.meta.url), 'utf8');
   assert.match(auth, /auth\.signUp/);
   assert.match(auth, /emailRedirectTo/);
   assert.match(auth, /passwordMismatch/);
@@ -1354,11 +1356,14 @@ test('registration, privacy policy and account deletion request are wired', () =
   assert.match(auth, /auth-field-error/);
   assert.match(auth, /auth-close/);
   assert.match(auth, /this\.setMode\(mode === 'signup' \? 'signup' : 'signin'\)/);
-  assert.match(shell, /data-auth-entry="signin"/);
-  assert.match(shell, /data-auth-entry="signup"/);
-  assert.match(main, /sheet\.open\(button\.dataset\.authEntry\)/);
-  assert.match(authCss, /html\[data-signed-in\] \.auth-entry/);
-  assert.match(authCss, /\.auth-entry-signup/);
+  assert.doesNotMatch(shell, /data-auth-entry|class="auth-entry"/);
+  assert.doesNotMatch(authCss, /\.auth-entry/);
+  assert.match(main, /function showLive\(room = null\) \{\s*if \(!requireLogin\(\)\) return;/);
+  assert.match(main, /if \(target\.id === 'walkieEntry'\) \{\s*if \(requireLogin\(\)\)/);
+  assert.match(main, /nav === 'inbox'.*requireLogin\(\)/);
+  assert.match(main, /else if \(nav === 'me'\) openProfile\(\)/);
+  assert.match(feed, /#like\(post, on\) \{\s*if \(!this\.hooks\.requireLogin\(\)\) return;/);
+  assert.match(comments, /if \(!body \|\| !this\.requireLogin\(\)\) return;/);
   const policy = readFileSync(new URL('../privacy.html', import.meta.url), 'utf8');
   const deletion = readFileSync(new URL('../account-deletion.html', import.meta.url), 'utf8');
   assert.match(policy, /account-deletion\.html/);

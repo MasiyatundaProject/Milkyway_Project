@@ -119,6 +119,7 @@ function showHome() {
   feedView.focus();
 }
 function showLive(room = null) {
+  if (!requireLogin()) return;
   playback.suspend(true);
   $('feedView').hidden = true;
   $('exploreView').hidden = true;
@@ -241,9 +242,6 @@ shell.toggleAttribute('data-muted', playback.muted);
 document.querySelectorAll('[data-i18n]').forEach(node => { node.textContent = t(node.dataset.i18n); });
 $('profileSearch').setAttribute('aria-label', t('searchPeople'));
 $('profileSearch').title = t('searchPeople');
-document.querySelectorAll('[data-auth-entry]').forEach(button => {
-  button.addEventListener('click', () => authSheet().then(sheet => sheet.open(button.dataset.authEntry)));
-});
 setScope(scope);
 route();
 const sharedPostId = new URLSearchParams(location.search).get('post');
