@@ -39,7 +39,7 @@ svg { width: 1em; height: 1em; fill: currentColor; display: block; }
 /* ---- Top bar & bottom nav --------------------------------------------------------------------------------- */
 .topbar {
   position: fixed; z-index: 20; inset: 0 0 auto; height: var(--top-h); padding: env(safe-area-inset-top) 12px 0;
-  display: grid; grid-template-columns: 64px minmax(0, 1fr) repeat(3, 40px); align-items: center;
+  display: grid; grid-template-columns: 64px minmax(0, 1fr) 62px 40px 40px; align-items: center;
   background: linear-gradient(rgba(5,6,26,.6), transparent); pointer-events: none;
 }
 .topbar > * { pointer-events: auto; }
@@ -53,7 +53,10 @@ html[data-view="explore"] .topbar { display: none; }
 .live-entry.has-live { border-color: var(--accent); background: var(--accent); animation: livePulse 1.6s ease-in-out infinite; }
 @keyframes livePulse { 50% { box-shadow: 0 0 0 6px rgba(176, 92, 255, 0); } 0% { box-shadow: 0 0 0 0 rgba(176, 92, 255, .6); } }
 .icon-btn { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 50%; font-size: 22px; }
-.walkie-entry { grid-column: 3; color: #ff6b85; }
+.walkie-entry { grid-column: 3; width: 62px; height: 48px; border-radius: 8px; grid-template-rows: 28px 13px; gap: 1px; color: #ff6b85; }
+.walkie-entry svg { width: 22px; height: 22px; }
+.walkie-label { max-width: 58px; font-size: 8.5px; line-height: 11px; font-weight: 800; white-space: nowrap; color: currentColor; text-align: center; }
+.walkie-entry.hide-label .walkie-label { display: none; }
 .mute-toggle { justify-self: end; grid-column: 4; }
 .profile-search { justify-self: end; grid-column: 5; }
 .mute-toggle svg { font-size: 22px; filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }

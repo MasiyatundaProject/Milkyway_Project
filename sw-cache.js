@@ -125,8 +125,6 @@
       const saved = await cache.match(request);
       const refresh = () => fetch(request).then(async response => {
         if (response.ok) {
-          const length = Number(response.headers.get('content-length'));
-          if (!Number.isFinite(length) || length <= 0 || length > IMAGE_MAX_BYTES) return response;
           const headers = new Headers(response.headers);
           headers.set('x-mw-saved-at', String(Date.now()));
           const body = await response.clone().blob();
@@ -168,14 +166,18 @@
       if (request.method !== 'GET' || request.headers.has('Authorization') || request.headers.has('Range')) return;
       if (request.mode !== 'navigate' && ['no-store', 'reload', 'no-cache'].includes(request.cache)) return;
       const address = new URL(request.url);
-      if (address.hostname.endsWith('.supabase.co')
-        && address.pathname.startsWith('/storage/v1/object/public/portfolio/')
-        && /\.(?:jpe?g|png|webp|gif|avif)$/i.test(address.pathname)) {
+      const publicSupabaseImage = address.hostname.endsWith('.supabase.co')
+        && address.pathname.startsWith('/storage/v1/object/public/')
+        && (request.destination === 'image' || /\.(?:jpe?g|png|webp|gif|avif)$/i.test(address.pathname));
+      const imageEndpoint = request.destination === 'image'
+        && (/^\/cdn-cgi\/image\//.test(address.pathname) || /^\/\.netlify\/images$/.test(address.pathname));
+      if (publicSupabaseImage || imageEndpoint) {
         event.respondWith(optimizedImage(event));
         return;
       }
       if (address.origin !== self.location.origin) {
-        if (CDN_HOSTS.includes(address.hostname)) event.respondWith(staleWhileRevalidate(event, cdn));
+        if (request.destination === 'image') event.respondWith(optimizedImage(event));
+        else if (CDN_HOSTS.includes(address.hostname)) event.respondWith(staleWhileRevalidate(event, cdn));
         return;
       }
       if (!inScope(address, request) || /\/download\//.test(address.pathname)) return;
