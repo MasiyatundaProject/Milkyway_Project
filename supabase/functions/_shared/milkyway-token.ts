@@ -74,7 +74,7 @@ export async function milkywayToken(request: Request) {
         if (!/^mw-call-[a-f0-9-]{36}$/i.test(roomName)) return json({ error: 'Invalid call room.' }, 400);
         const [call] = await query(`rest/v1/mw_dm_calls?id=eq.${roomName.slice(8)}&select=caller_id,callee_id,status,offer&limit=1`);
         if (!call || ![call.caller_id, call.callee_id].includes(account.id) || call.status !== 'accepted' || call.offer?.transport !== 'livekit') return json({ error: 'Only participants in an accepted call can join.' }, 403);
-        canPublish = true;audioOnly = call.offer.mode !== 'video';
+        canPublish = true;audioOnly = (call.offer?.callType ?? call.offer?.mode ?? (call.offer?.videoEnabled ? 'video' : 'audio')) !== 'video';
       } else {
         if (roomName.startsWith('mw-call-')) return json({ error: 'Call rooms require call authorization.' }, 403);
         const [record] = await query(`rest/v1/mw_video_live_sessions?room_name=eq.${encodeURIComponent(roomName)}&select=host_id,scope,is_live&limit=1`);
@@ -106,7 +106,7 @@ export async function milkywayToken(request: Request) {
       }
       const token = new AccessToken(apiKey!, apiSecret!, { identity: account.id, name: String(body.name || 'MilkyWay user').slice(0, 80), ttl: '1m' });
       token.addGrant({ roomJoin: true, room: roomName, canSubscribe: true, canPublish, canPublishData: true, canPublishSources: canPublish ? audioOnly ? [2] : [1, 2] : [] });
-      return json({ token: await token.toJwt(), serverUrl, roomName, room: roomName });
+      return json({ token: await token.toJwt(), serverUrl, roomName, room: roomName, callType: audioOnly ? 'audio' : 'video', videoEnabled: !audioOnly });
     }
     if (!/^mw-conversation-(audio|video)-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(roomName)) return json({ error: 'Invalid conversation room.' }, 400);
     if (action === 'sync' && (typeof target !== 'string' || !/^[a-f0-9-]{36}$/i.test(target))) return json({ error: 'Invalid participant.' }, 400);

@@ -236,7 +236,7 @@ test('Cloudflare Pages API passes its LiveKit bindings through to the DM call to
   const callId = P(81);
   const call = {
     id: callId, caller_id: A, callee_id: B, status: 'accepted',
-    offer: { mode: 'video' }, created_at: new Date().toISOString(),
+    offer: { mode: 'video', callType: 'video', videoEnabled: true }, created_at: new Date().toISOString(),
   };
   globalThis.fetch = async address => {
     const url = String(address);
@@ -264,6 +264,10 @@ test('Cloudflare Pages API passes its LiveKit bindings through to the DM call to
     assert.equal(claims.iss, 'binding-key');
     assert.equal(claims.sub, A);
     assert.equal(claims.video.room, `dm-call-${A}-${B}`);
+    assert.equal(claims.video.roomJoin, true);
+    assert.equal(claims.video.canPublish, true);
+    assert.equal(claims.video.canSubscribe, true);
+    assert.equal(claims.video.canPublishData, true);
     assert.deepEqual(claims.video.canPublishSources, ['camera', 'microphone']);
     assert.deepEqual(JSON.parse(claims.metadata), { avatar: '', callType: 'video', videoEnabled: true });
     const missingResponse = await runApi('milkyway-call', new Request('https://www.masiyatunda.com/api/milkyway-call?action=start', {
@@ -695,6 +699,9 @@ test('DM call connection uses authenticated LiveKit tokens and reports server co
   assert.match(callView, /callAccessToken\(roomName, this\.call\.id, auth\.name\)/);
   assert.match(callApi, /offer: \{ transport: 'livekit', mode: callType, callType, videoEnabled, name \}/);
   assert.match(callApi, /payload: \{ id, kind, callType, videoEnabled: callType === 'video' \}/);
+  assert.match(callApi, /roomJoin: true, canSubscribe: true, canPublishData: true, canPublish/);
+  assert.match(callView, /callTypeOf = call => .*videoEnabled/);
+  assert.match(callView, /this\.camOn = this\.callType === 'video'/);
   assert.match(callView, /callType, videoEnabled, name: auth\.name/);
   assert.match(callView, /#startRingtone/);
   assert.match(callView, /#stopRingtone/);

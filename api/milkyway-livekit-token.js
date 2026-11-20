@@ -104,15 +104,16 @@ async function callToken(req, res, body) {
       await closeRoom(ctx, room);
       return res.status(409).json({ error: 'This call has ended.' });
     }
+    const callType = (call.offer?.callType ?? call.offer?.mode ?? (call.offer?.videoEnabled ? 'video' : 'audio')) === 'video' ? 'video' : 'audio';
     const video = kind.toLowerCase() === 'video';
-    if ((call.offer?.mode === 'video') !== video) return res.status(403).json({ error: 'Not allowed.' });
+    if (callType !== (video ? 'video' : 'audio')) return res.status(403).json({ error: 'Not allowed.' });
     const [profile] = await ctx.rest(`mw_profiles?id=eq.${me}&select=display_name,username,avatar_url&limit=1`).catch(() => []) || [];
     const token = accessToken({
       identity: me, room, canPublish: true, sources: video ? [CAMERA, MIC] : [MIC], ttlSeconds: 60,
       name: String(profile?.display_name || profile?.username || body.name || 'MilkyWay user').slice(0, 80),
-      metadata: JSON.stringify({ avatar: String(profile?.avatar_url || '').slice(0, 500) }),
+      metadata: JSON.stringify({ avatar: String(profile?.avatar_url || '').slice(0, 500), callType, videoEnabled: video }),
     }, ctx.env);
-    return res.status(200).json({ contractVersion: 2, token, serverUrl: livekitUrl(ctx.env), roomName: room, room, service: 'netlify' });
+    return res.status(200).json({ contractVersion: 2, token, serverUrl: livekitUrl(ctx.env), roomName: room, room, callType, videoEnabled: video, service: 'netlify' });
   } catch (error) {
     return res.status(error?.status && error.status < 500 ? error.status : 503).json({ error: error?.message || 'Call service is unavailable right now.' });
   }

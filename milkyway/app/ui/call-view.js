@@ -28,7 +28,7 @@ async function callAccessToken(roomName, callId, name) {
 const RING_MS = 55_000;
 const callApi = (action, body) => api(`${CALL_API}?action=${action}`, body ? { method: 'POST', body, timeout: 15000 } : { timeout: 12000 });
 const getCall = id => api(`${CALL_API}?id=${encodeURIComponent(id)}`, { timeout: 10000 }).then(data => data?.call || null);
-const callTypeOf = call => (call?.offer?.callType ?? call?.offer?.mode) === 'video' ? 'video' : 'audio';
+const callTypeOf = call => (call?.offer?.callType ?? call?.offer?.mode ?? (call?.offer?.videoEnabled ? 'video' : 'audio')) === 'video' ? 'video' : 'audio';
 
 const icons = {
   phone: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1L6.6 10.8z"/></svg>',
@@ -49,7 +49,7 @@ class CallScreen {
     this.roomConnected = false;
     this.connectedAt = 0;
     this.micOn = true;
-    this.camOn = mode === 'video';
+    this.camOn = this.callType === 'video';
     this.facing = 'user';
     this.#build();
     playback.suspend(true);

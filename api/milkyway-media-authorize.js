@@ -21,7 +21,8 @@ async function authorize({ request, ctx, body }) {
   const call = await loadCall(ctx, id);
   if (!call) throw new ApiError(404, 'Call not found.');
   if (![call.caller_id, call.callee_id].includes(me)) throw new ApiError(403, 'Not allowed.');
-  if ((call.offer?.mode === 'video') === audio) throw new ApiError(403, 'Not allowed.');
+  const videoCall = (call.offer?.callType ?? call.offer?.mode ?? (call.offer?.videoEnabled ? 'video' : 'audio')) === 'video';
+  if (videoCall === audio) throw new ApiError(403, 'Not allowed.');
   const sources = audio ? [2] : [1, 2];
 
   if (action === 'end') {
