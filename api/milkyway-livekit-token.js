@@ -77,8 +77,8 @@ async function liveToken(req, res, body) {
     const token = accessToken({
       identity: me, name, room, canPublish: sources.length > 0, sources, ttlSeconds: 60,
       metadata: JSON.stringify({ avatar: String(profile?.avatar_url || '').slice(0, 500) }),
-    });
-    return res.status(200).json({ contractVersion: 2, token, serverUrl: livekitUrl(), roomName: room, room, service: 'cloudflare' });
+    }, ctx.env);
+    return res.status(200).json({ contractVersion: 2, token, serverUrl: livekitUrl(ctx.env), roomName: room, room, service: 'cloudflare' });
   } catch (error) {
     return res.status(error?.status && error.status < 500 ? error.status : 503).json({ error: error?.message || 'LIVE service is unavailable right now.' });
   }
@@ -111,8 +111,8 @@ async function callToken(req, res, body) {
       identity: me, room, canPublish: true, sources: video ? [CAMERA, MIC] : [MIC], ttlSeconds: 60,
       name: String(profile?.display_name || profile?.username || body.name || 'MilkyWay user').slice(0, 80),
       metadata: JSON.stringify({ avatar: String(profile?.avatar_url || '').slice(0, 500) }),
-    });
-    return res.status(200).json({ contractVersion: 2, token, serverUrl: livekitUrl(), roomName: room, room, service: 'netlify' });
+    }, ctx.env);
+    return res.status(200).json({ contractVersion: 2, token, serverUrl: livekitUrl(ctx.env), roomName: room, room, service: 'netlify' });
   } catch (error) {
     return res.status(error?.status && error.status < 500 ? error.status : 503).json({ error: error?.message || 'Call service is unavailable right now.' });
   }
@@ -127,7 +127,7 @@ export default async function handler(req, res) {
   // those differ, LiveKit refuses the connection with "could not establish signal connection: invalid API key".
   // When LiveKit refuses this server's own key (checked once and cached), tokens come from the Supabase function instead
   // of handing out tokens that are certain to fail.
-  if (req.method === 'POST' && req.body && typeof req.body === 'object' && await livekitUsable()) {
+  if (req.method === 'POST' && req.body && typeof req.body === 'object' && await livekitUsable({ environment: req.env })) {
     const room = typeof req.body.room === 'string' ? req.body.room : typeof req.body.roomName === 'string' ? req.body.roomName : '';
     if ((req.body.action || 'token') === 'token') {
       if (LIVE_ROOM.test(room)) return liveToken(req, res, req.body);

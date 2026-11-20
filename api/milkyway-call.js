@@ -1,5 +1,5 @@
 import { route, ApiError, SUPABASE, requireUuid } from './_lib/supa.js';
-import { livekitUrl, livekitUsable, livekitConfigured, accessToken, closeRoom, CAMERA, MIC } from './_lib/livekit.js';
+import { livekitUrl, livekitConfigurationError, accessToken, closeRoom, CAMERA, MIC } from './_lib/livekit.js';
 
 const OUTCOMES = ['ended', 'missed', 'cancelled', 'rejected', 'disconnected'];
 const RING_WINDOW_MS = 60000;
@@ -17,10 +17,8 @@ async function loadCall(ctx, id) {
 // Issues a participant-scoped token for the deterministic room shared by the two call participants.
 async function access(ctx, call, name) {
   const video = call.offer?.mode === 'video';
-  if (!livekitConfigured()) {
-    throw new ApiError(503, 'DM calling is not configured. Set LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET on the API server.');
-  }
-  if (!await livekitUsable()) throw new ApiError(503, 'DM calling cannot connect: LIVEKIT_URL must be a valid LiveKit WebSocket URL.');
+  const configError = livekitConfigurationError(ctx.env);
+  if (configError) throw new ApiError(503, configError);
   const roomName = dmRoomName(call);
   let profile = null;
   try { [profile] = await ctx.rest(`mw_profiles?id=eq.${ctx.user.id}&select=display_name,username,avatar_url&limit=1`) || []; } catch {}
@@ -28,8 +26,8 @@ async function access(ctx, call, name) {
     identity: ctx.user.id, room: roomName, canPublish: true, sources: video ? [CAMERA, MIC] : [MIC], ttlSeconds: 60,
     name: String(name || profile?.display_name || profile?.username || 'MilkyWay user').slice(0, 80),
     metadata: JSON.stringify({ avatar: String(profile?.avatar_url || '').slice(0, 500) }),
-  });
-  return { token, serverUrl: livekitUrl(), roomName, mode: video ? 'video' : 'audio' };
+  }, ctx.env);
+  return { token, serverUrl: livekitUrl(ctx.env), roomName, mode: video ? 'video' : 'audio' };
 }
 
 const cleanName = value => typeof value === 'string' ? value.trim().slice(0, 80) : '';
@@ -56,10 +54,8 @@ export default route({
 
   start: async ({ ctx, body, method }) => {
     POST_ONLY(method);
-    if (!livekitConfigured()) {
-      throw new ApiError(503, 'DM calling is not configured. Set LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET on the API server.');
-    }
-    if (!await livekitUsable()) throw new ApiError(503, 'DM calling cannot connect: LIVEKIT_URL must be a valid LiveKit WebSocket URL.');
+    const configError = livekitConfigurationError(ctx.env);
+    if (configError) throw new ApiError(503, configError);
     const callee = requireUuid(body.callee, 'callee');
     if (callee === ctx.user.id) throw new ApiError(400, 'You cannot call yourself.');
     const mode = body.mode === 'video' ? 'video' : 'audio';

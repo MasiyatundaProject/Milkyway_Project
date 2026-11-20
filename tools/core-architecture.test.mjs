@@ -7,7 +7,7 @@ import liveRoom from '../api/milkyway-live-room.js';
 import callApi from '../api/milkyway-call.js';
 import livekitToken from '../api/milkyway-livekit-token.js';
 import { runApi } from '../api/_lib/fetch-adapter.js';
-import { closeRoom, livekitUsable } from '../api/_lib/livekit.js';
+import { accessToken, closeRoom, livekitConfigurationError, livekitConfigured, livekitUrl, livekitUsable } from '../api/_lib/livekit.js';
 import { postShareResponse } from '../api/_lib/post-share.js';
 import { assertRoomAccess } from '../milkyway/app/core/livekit-access.js';
 import { identifyMediaFile, mediaInfo, openFilePicker } from '../milkyway/app/core/media-files.js';
@@ -211,6 +211,68 @@ test('ordinary LiveKit token checks avoid RoomService management requests', asyn
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+  }
+});
+
+test('LiveKit reads Cloudflare bindings first and identifies missing credentials by name', () => {
+  const bindings = {
+    LIVEKIT_URL: 'wss://binding-live.example.test',
+    LIVEKIT_API_KEY: 'binding-key',
+    LIVEKIT_API_SECRET: 'binding-secret',
+  };
+  assert.equal(livekitConfigured(bindings), true);
+  assert.equal(livekitUrl(bindings), bindings.LIVEKIT_URL);
+  assert.equal(livekitConfigurationError({ LIVEKIT_URL: bindings.LIVEKIT_URL, LIVEKIT_API_KEY: '' }),
+    'LiveKit is not configured. Missing LIVEKIT_API_KEY, LIVEKIT_API_SECRET. Set LIVEKIT_URL in [vars] and LIVEKIT_API_KEY / LIVEKIT_API_SECRET as Cloudflare secrets.');
+  assert.match(livekitConfigurationError({ ...bindings, LIVEKIT_URL: 'not-a-url' }), /LIVEKIT_URL is invalid/);
+  const claims = JSON.parse(Buffer.from(accessToken({ identity: A, room: `dm-call-${A}-${B}`, canPublish: true }, bindings).split('.')[1], 'base64url'));
+  assert.equal(claims.iss, bindings.LIVEKIT_API_KEY);
+  assert.equal(claims.sub, A);
+  assert.equal(claims.video.room, `dm-call-${A}-${B}`);
+});
+
+test('Cloudflare Pages API passes its LiveKit bindings through to the DM call token issuer', async () => {
+  const originalFetch = globalThis.fetch;
+  const callId = P(81);
+  const call = {
+    id: callId, caller_id: A, callee_id: B, status: 'accepted',
+    offer: { mode: 'video' }, created_at: new Date().toISOString(),
+  };
+  globalThis.fetch = async address => {
+    const url = String(address);
+    if (url.endsWith('/auth/v1/user')) return new Response(JSON.stringify({ id: A }), { status: 200 });
+    if (url.includes('/rest/v1/mw_dm_calls?')) return new Response(JSON.stringify([call]), { status: 200 });
+    if (url.includes('/rest/v1/mw_profiles?')) return new Response('[]', { status: 200 });
+    throw new Error(`Unexpected DM token request: ${url}`);
+  };
+  try {
+    const response = await runApi('milkyway-call', new Request(`https://www.masiyatunda.com/api/milkyway-call?action=token`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer test-session', apikey: 'test-public-key', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: callId, name: 'Caller' }),
+    }), {
+      LIVEKIT_URL: 'wss://binding-live.example.test',
+      LIVEKIT_API_KEY: 'binding-key',
+      LIVEKIT_API_SECRET: 'binding-secret',
+    });
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(payload.serverUrl, 'wss://binding-live.example.test');
+    const claims = JSON.parse(Buffer.from(payload.token.split('.')[1], 'base64url'));
+    assert.equal(claims.iss, 'binding-key');
+    assert.equal(claims.sub, A);
+    assert.equal(claims.video.room, `dm-call-${A}-${B}`);
+    assert.deepEqual(claims.video.canPublishSources, ['camera', 'microphone']);
+    const missingResponse = await runApi('milkyway-call', new Request('https://www.masiyatunda.com/api/milkyway-call?action=start', {
+      method: 'POST',
+      headers: { authorization: 'Bearer test-session', apikey: 'test-public-key', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ callee: B, mode: 'audio' }),
+    }), { LIVEKIT_URL: 'wss://binding-live.example.test' });
+    const missing = await missingResponse.json();
+    assert.equal(missingResponse.status, 503);
+    assert.match(missing.error, /Missing LIVEKIT_API_KEY, LIVEKIT_API_SECRET/);
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
 
@@ -617,14 +679,15 @@ test('DM call connection uses authenticated LiveKit tokens and reports server co
   const liveKit = readFileSync(new URL('../api/_lib/livekit.js', import.meta.url), 'utf8');
   const callApi = readFileSync(new URL('../api/milkyway-call.js', import.meta.url), 'utf8');
   const translations = readFileSync(new URL('../milkyway/app/core/i18n.js', import.meta.url), 'utf8');
-  assert.match(callApi, /if \(!livekitConfigured\(\)\)/);
-  assert.match(callApi, /if \(!await livekitUsable\(\)\)/);
+  assert.match(callApi, /livekitConfigurationError\(ctx\.env\)/);
   assert.doesNotMatch(callApi, /functions\/v1\/livekit-token/);
-  assert.match(callApi, /serverUrl:\s*livekitUrl\(\)/);
+  assert.match(callApi, /serverUrl:\s*livekitUrl\(ctx\.env\)/);
   assert.match(callApi, /const dmRoomName = call => `dm-call-/);
   assert.match(callApi, /const roomName = dmRoomName\(call\)/);
   assert.match(liveKit, /LIVEKIT_URL.*LIVEKIT_API_KEY.*LIVEKIT_API_SECRET/);
-  assert.match(liveKit, /const validLivekitUrl = \(\) =>/);
+  assert.match(liveKit, /const validLivekitUrl = environment =>/);
+  assert.match(liveKit, /environment \? environment\[name\] \?\? '' : process\.env\[name\]/);
+  assert.match(liveKit, /ctx\.env/);
   assert.match(liveKit, /url\.pathname === '\/'.*!url\.username/);
   assert.match(callView, /callAccessToken\(roomName, this\.call\.id, auth\.name\)/);
   assert.doesNotMatch(callView, /await directCallToken/);
@@ -1424,10 +1487,19 @@ test('Cloudflare build accepts configured Supabase origin and rejects malformed 
 
 test('Cloudflare Pages routes production hosts to the primary custom domain', async () => {
   const wrangler = readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
+  const apiMiddleware = readFileSync(new URL('../functions/api/_middleware.js', import.meta.url), 'utf8');
+  const fetchAdapter = readFileSync(new URL('../api/_lib/fetch-adapter.js', import.meta.url), 'utf8');
+  const supa = readFileSync(new URL('../api/_lib/supa.js', import.meta.url), 'utf8');
   const supabase = readFileSync(new URL('../supabase/config.toml', import.meta.url), 'utf8');
   const homepage = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   const middleware = await import('../functions/_middleware.js');
   assert.match(wrangler, /^name = "milkyway-project"$/m);
+  assert.match(wrangler, /^LIVEKIT_URL = "wss:\/\/masiyatunda-milkyway-live-mgh6b1np\.livekit\.cloud"$/m);
+  assert.match(apiMiddleware, /onRequest = \(\{ request, env \}\)/);
+  assert.match(apiMiddleware, /runApi\(name, request, env\)/);
+  assert.match(fetchAdapter, /runApi\(name, request, environment = null\)/);
+  assert.match(fetchAdapter, /env: environment/);
+  assert.match(supa, /makeContext\(user, token, key, request\.env\)/);
   assert.match(supabase, /site_url = "https:\/\/www\.masiyatunda\.com"/);
   assert.match(supabase, /"https:\/\/milkyway-project\.pages\.dev\/\*\*"/);
   assert.match(homepage, /rel="canonical" href="https:\/\/www\.masiyatunda\.com\/"/);

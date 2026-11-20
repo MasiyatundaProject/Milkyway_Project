@@ -49,7 +49,7 @@ export async function authenticate(request, response, { optional = false } = {})
   const key = supabaseKey(request);
   if (!key) { fail(response, 503, 'Supabase API key is not configured.'); return null; }
   if (!/^Bearer\s+\S+/.test(auth)) {
-    if (optional) return makeContext(null, '', key);
+    if (optional) return makeContext(null, '', key, request.env);
     fail(response, 401, 'Sign in first.');
     return null;
   }
@@ -60,14 +60,14 @@ export async function authenticate(request, response, { optional = false } = {})
     if (result.ok) user = await result.json();
   } catch { fail(response, 503, 'Sign-in service unavailable.'); return null; }
   if (!user?.id) {
-    if (optional) return makeContext(null, '', key);
+    if (optional) return makeContext(null, '', key, request.env);
     fail(response, 401, 'Invalid or expired session.');
     return null;
   }
-  return makeContext(user, token, key);
+  return makeContext(user, token, key, request.env);
 }
 
-function makeContext(user, token, key) {
+function makeContext(user, token, key, environment = null) {
   const headers = (extra = {}) => ({ apikey: key, Authorization: `Bearer ${token || key}`, 'Content-Type': 'application/json', ...extra });
   const send = async (url, init = {}) => {
     let result;
@@ -85,7 +85,7 @@ function makeContext(user, token, key) {
     return data;
   };
   return {
-    user, token, key,
+    user, token, key, env: environment,
     // rest('mw_posts?select=*&limit=5') returns rows; rest(path, { method: 'POST', body, returning: true })
     rest: (path, { method = 'GET', body, returning = false, prefer = '' } = {}) => send(`${SUPABASE}/rest/v1/${path}`, {
       method, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
