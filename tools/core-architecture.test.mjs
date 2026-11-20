@@ -23,6 +23,8 @@ test('group management schema and UI implement guarded joins, invitations and co
   const inbox = readFileSync(new URL('../milkyway/app/ui/inbox-view.js', import.meta.url), 'utf8');
   const view = readFileSync(new URL('../milkyway/app/ui/group-view.js', import.meta.url), 'utf8');
   const data = readFileSync(new URL('../milkyway/app/data/groups.js', import.meta.url), 'utf8');
+  const approvalMigration = readFileSync(new URL('../supabase/migrations/20261211_milkyway_group_approved_owner.sql', import.meta.url), 'utf8');
+  const repair = readFileSync(new URL('../supabase/milkyway-schema-repair.sql', import.meta.url), 'utf8');
   assert.match(migration, /join_mode in \('open', 'request_approval', 'invite_only'\)/);
   assert.match(migration, /add column if not exists avatar_url text not null default ''/);
   assert.match(migration, /add column if not exists join_mode text not null default 'invite_only'/);
@@ -47,6 +49,17 @@ test('group management schema and UI implement guarded joins, invitations and co
   assert.match(api, /missingGroupColumn/);
   assert.match(api, /\['id', 'name', 'caption', \.\.\.optionalColumns, 'created_at'\]/);
   assert.match(api, /optionalColumns\.delete\(missing\)/);
+  assert.match(api, /created_by: group\.created_by/);
+  assert.match(api, /listCreatedGroups/);
+  assert.match(inbox, /isActiveGroupMember\(group\)/);
+  assert.match(view, /isActiveGroupMember\(member/);
+  assert.match(view, /canDelete = creator \|\| \['admin', 'owner'\]\.includes\(group\.role\)/);
+  assert.match(view, /deleteGroup\(this\.group\.id\)/);
+  assert.match(approvalMigration, /join_status in \('active', 'approved', 'pending', 'invited'\)/);
+  assert.match(approvalMigration, /role in \('admin', 'co_admin', 'member', 'owner'\)/);
+  assert.match(approvalMigration, /Only group admins or the creator can delete the group/);
+  assert.match(repair, /supabase\/migrations\/20261211_milkyway_group_approved_owner\.sql/);
+  assert.match(repair, /Only group admins or the creator can delete the group/);
 });
 
 test('DM media notes include private one-view storage and recording controls', () => {
