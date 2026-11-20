@@ -31,7 +31,7 @@ const defaults = {
     // Leave empty: the token endpoint returns the server URL. Set it to pre-warm the connection earlier.
     url: '',
     tokenEndpoint: '/api/milkyway-livekit-token',
-    // Used when the site API is unreachable (e.g. a static mirror).
+    // Used by LIVE sessions when the site API is unreachable (e.g. a static mirror).
     directTokenEndpoint: `${(envSupabaseUrl || 'https://wpclkhgizbvxuvbhbwzs.supabase.co').replace(/\/+$/, '')}/functions/v1/livekit-token`,
     sdkUrls: [
       'https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js',
