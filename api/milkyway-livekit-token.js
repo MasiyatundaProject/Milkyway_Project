@@ -104,7 +104,7 @@ async function callToken(req, res, body) {
       await closeRoom(ctx, room);
       return res.status(409).json({ error: 'This call has ended.' });
     }
-    const callType = (call.offer?.callType ?? call.offer?.mode ?? (call.offer?.videoEnabled ? 'video' : 'audio')) === 'video' ? 'video' : 'audio';
+    const callType = call.offer?.callType === 'video' || call.offer?.mode === 'video' || call.offer?.videoEnabled === true ? 'video' : 'audio';
     const video = kind.toLowerCase() === 'video';
     if (callType !== (video ? 'video' : 'audio')) return res.status(403).json({ error: 'Not allowed.' });
     const [profile] = await ctx.rest(`mw_profiles?id=eq.${me}&select=display_name,username,avatar_url&limit=1`).catch(() => []) || [];

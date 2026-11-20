@@ -74,7 +74,7 @@ export async function milkywayToken(request: Request) {
         if (!/^mw-call-[a-f0-9-]{36}$/i.test(roomName)) return json({ error: 'Invalid call room.' }, 400);
         const [call] = await query(`rest/v1/mw_dm_calls?id=eq.${roomName.slice(8)}&select=caller_id,callee_id,status,offer&limit=1`);
         if (!call || ![call.caller_id, call.callee_id].includes(account.id) || call.status !== 'accepted' || call.offer?.transport !== 'livekit') return json({ error: 'Only participants in an accepted call can join.' }, 403);
-        canPublish = true;audioOnly = (call.offer?.callType ?? call.offer?.mode ?? (call.offer?.videoEnabled ? 'video' : 'audio')) !== 'video';
+        canPublish = true;audioOnly = !(call.offer?.callType === 'video' || call.offer?.mode === 'video' || call.offer?.videoEnabled === true);
       } else {
         if (roomName.startsWith('mw-call-')) return json({ error: 'Call rooms require call authorization.' }, 403);
         const [record] = await query(`rest/v1/mw_video_live_sessions?room_name=eq.${encodeURIComponent(roomName)}&select=host_id,scope,is_live&limit=1`);

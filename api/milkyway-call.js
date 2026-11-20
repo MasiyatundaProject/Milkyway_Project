@@ -6,7 +6,7 @@ const RING_WINDOW_MS = 60000;
 const COLUMNS = 'id,caller_id,callee_id,status,offer,answer,created_at,ended_at';
 const POST_ONLY = method => { if (method !== 'POST') throw new ApiError(405, 'Method not allowed.'); };
 const dmRoomName = call => `dm-call-${[call.caller_id, call.callee_id].map(id => id.toLowerCase()).sort().join('-')}`;
-const callTypeOf = call => (call?.offer?.callType ?? call?.offer?.mode ?? (call?.offer?.videoEnabled ? 'video' : 'audio')) === 'video' ? 'video' : 'audio';
+const callTypeOf = call => call?.offer?.callType === 'video' || call?.offer?.mode === 'video' || call?.offer?.videoEnabled === true ? 'video' : 'audio';
 
 async function loadCall(ctx, id) {
   const [call] = await ctx.rest(`mw_dm_calls?id=eq.${requireUuid(id, 'call')}&select=${COLUMNS}&limit=1`) || [];
@@ -60,7 +60,7 @@ export default route({
     if (configError) throw new ApiError(503, configError);
     const callee = requireUuid(body.callee, 'callee');
     if (callee === ctx.user.id) throw new ApiError(400, 'You cannot call yourself.');
-    const callType = (body.callType ?? body.mode ?? (body.videoEnabled ? 'video' : 'audio')) === 'video' ? 'video' : 'audio';
+    const callType = body.callType === 'video' || body.mode === 'video' || body.videoEnabled === true ? 'video' : 'audio';
     const videoEnabled = callType === 'video';
     const name = cleanName(body.name);
     const [existing] = await ctx.rest(

@@ -683,6 +683,7 @@ test('LIVE room UPSERT targets have unique indexes after duplicate rows are reco
 
 test('DM call connection uses authenticated LiveKit tokens and reports server configuration failures', () => {
   const callView = readFileSync(new URL('../milkyway/app/ui/call-view.js', import.meta.url), 'utf8');
+  const callCss = readFileSync(new URL('../milkyway/app/app.css', import.meta.url), 'utf8');
   const liveKit = readFileSync(new URL('../api/_lib/livekit.js', import.meta.url), 'utf8');
   const callApi = readFileSync(new URL('../api/milkyway-call.js', import.meta.url), 'utf8');
   const translations = readFileSync(new URL('../milkyway/app/core/i18n.js', import.meta.url), 'utf8');
@@ -708,6 +709,10 @@ test('DM call connection uses authenticated LiveKit tokens and reports server co
   assert.match(callView, /track\.attach\(element\)/);
   assert.match(callView, /element\.autoplay = true/);
   assert.match(callView, /element\.playsInline = true/);
+  assert.match(callView, /#showMediaError\(error, 'camera publishing'\)/);
+  assert.match(callView, /#showMediaError\(error, 'camera toggle'\)/);
+  assert.match(callView, /console\.error\(`\[call\] \$\{operation\} failed`, error\)/);
+  assert.doesNotMatch(callCss, /\.call-layer\[data-mode="audio"\] \.call-local/);
   assert.doesNotMatch(callView, /await directCallToken/);
   assert.doesNotMatch(callView, /directTokenEndpoint|directCallToken/);
   assert.match(callView, /await room\.connect\(access\.serverUrl, access\.token/);
@@ -1470,6 +1475,10 @@ test('app checks deployment version without caching and offers refresh for stale
   assert.match(updater, /mw-update-notice/);
   assert.match(worker, /update-check\.js/);
   assert.match(cache, /\['no-store', 'reload', 'no-cache'\]/);
+  assert.match(cache, /async function freshAsset\(event, name\)/);
+  assert.match(cache, /request\.destination === 'script' \|\| request\.destination === 'style'/);
+  assert.match(cache, /fetch\(request, \{ cache: 'reload' \}\)/);
+  assert.match(cache, /if \(saved\)\s*\{\s*keep\(event, refresh\.catch\(\(\) => \{\}\)\);\s*return saved;/);
   assert.match(build, /CF_PAGES_COMMIT_SHA/);
   assert.match(build, /app-version\.json/);
   assert.match(build, /versionedWorker/);

@@ -287,7 +287,7 @@ async function event(req, res) {
     recipientId = record.callee_id;
     if (!UUID.test(record.caller_id || '')) return sendJson(res, 400, { error: 'Invalid call event.' });
     const caller = await profileName(record.caller_id);
-    const mode = (record.offer?.callType ?? record.offer?.mode ?? (record.offer?.videoEnabled ? 'video' : 'audio')) === 'video' ? 'video' : 'audio';
+    const mode = record.offer?.callType === 'video' || record.offer?.mode === 'video' || record.offer?.videoEnabled === true ? 'video' : 'audio';
     notification = { title: `Incoming ${mode} call`, body: `${caller} is calling you.` };
     const url = `/milkyway/#call=${record.id}`;
     data = { url, kind: 'ring', callId: record.id, callType: mode, videoEnabled: String(mode === 'video') };

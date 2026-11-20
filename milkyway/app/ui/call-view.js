@@ -28,7 +28,7 @@ async function callAccessToken(roomName, callId, name) {
 const RING_MS = 55_000;
 const callApi = (action, body) => api(`${CALL_API}?action=${action}`, body ? { method: 'POST', body, timeout: 15000 } : { timeout: 12000 });
 const getCall = id => api(`${CALL_API}?id=${encodeURIComponent(id)}`, { timeout: 10000 }).then(data => data?.call || null);
-const callTypeOf = call => (call?.offer?.callType ?? call?.offer?.mode ?? (call?.offer?.videoEnabled ? 'video' : 'audio')) === 'video' ? 'video' : 'audio';
+const callTypeOf = call => call?.offer?.callType === 'video' || call?.offer?.mode === 'video' || call?.offer?.videoEnabled === true ? 'video' : 'audio';
 
 const icons = {
   phone: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1L6.6 10.8z"/></svg>',
@@ -216,7 +216,7 @@ class CallScreen {
           this.camOn = false;
           this.camBtn.classList.add('off');
           this.camBtn.innerHTML = icons.camOff;
-          toast(error?.message || t('callFailed'));
+          this.#showMediaError(error, 'camera publishing');
         }
       }
       if (room.remoteParticipants.size) this.#peerJoined();
@@ -248,6 +248,14 @@ class CallScreen {
     this.retryBtn.hidden = false;
     toast(message);
     this.#disconnectRoom();
+  }
+
+  #showMediaError(error, operation) {
+    const detail = callErrorText(error) || t('callFailed');
+    console.error(`[call] ${operation} failed`, error);
+    this.errorMessage.textContent = `${operation === 'camera publishing' ? 'Camera could not be published' : 'Camera action failed'}: ${detail}`;
+    this.errorMessage.hidden = false;
+    toast(`${t('callFailed')}: ${detail}`);
   }
 
   #disconnectRoom() {
@@ -363,12 +371,14 @@ class CallScreen {
 
   async #toggleCam() {
     const enabled = !this.camOn;
-    try { await this.room?.localParticipant.setCameraEnabled(enabled, { facingMode: this.facing }); }
-    catch (error) { toast(error?.message || t('callFailed')); return; }
+    if (!this.room) return;
+    try { await this.room.localParticipant.setCameraEnabled(enabled, { facingMode: this.facing }); }
+    catch (error) { this.#showMediaError(error, 'camera toggle'); return; }
     this.camOn = enabled;
     this.camBtn.classList.toggle('off', !this.camOn);
     this.camBtn.innerHTML = this.camOn ? icon.camera : icons.camOff;
     this.local.hidden = !this.camOn;
+    if (enabled) this.errorMessage.hidden = true;
   }
 
   async #flip() {

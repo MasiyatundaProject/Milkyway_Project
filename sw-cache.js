@@ -1,5 +1,5 @@
 // Shared caching for the site and MilkyWay service workers (loaded with importScripts).
-// Pages and static assets: shown straight from the saved copy and refreshed quietly in the background.
+// Pages are served from the saved shell and refreshed quietly; scripts and styles prefer the network with an offline fallback.
 // Viewed pictures stay in Cache Storage for offline use, including cross-origin opaque responses.
 // When a page arrives from the network with new content (a new deploy), its scripts and styles are fetched
 // fresh for a short window so a new page never runs with old code.
@@ -7,6 +7,7 @@
 // (Saved feed videos are played from the device by the MilkyWay worker; the feed itself lives in IndexedDB.)
 (() => {
   const PAGE_TIMEOUT = 3500;
+  const ASSET_TIMEOUT = 2500;
   const IMAGE_MAX_AGE = 24 * 60 * 60 * 1000;
   const CDN_HOSTS = ['cdn.jsdelivr.net', 'unpkg.com', 'fonts.googleapis.com', 'fonts.gstatic.com'];
   const STATIC = /(?:\.(?:html?|json|js|css|svg|png|jpe?g|webp|avif|gif|ico|woff2?|ttf|otf|webmanifest)|\/manifest\.json)$/i;
@@ -92,6 +93,26 @@
         return await network;
       } catch {
         throw new TypeError('Static asset is not available offline.');
+      }
+    }
+
+    async function freshAsset(event, name) {
+      const request = event.request;
+      const key = keyFor(request);
+      const cache = await caches.open(name);
+      const saved = await cache.match(key);
+      const refresh = fetch(request, { cache: 'reload' }).then(response => {
+        keep(event, save(name, key, response.clone()));
+        return response;
+      });
+      try {
+        return await timeout(refresh, ASSET_TIMEOUT);
+      } catch (error) {
+        if (saved) {
+          keep(event, refresh.catch(() => {}));
+          return saved;
+        }
+        throw error;
       }
     }
 
@@ -181,7 +202,11 @@
       if (!inScope(address, request) || /\/download\//.test(address.pathname)) return;
       if (address.pathname.startsWith('/api/')) return;
       if (request.mode === 'navigate') { event.respondWith(page(event)); return; }
-      if (isAsset(address)) event.respondWith(staleWhileRevalidate(event, assets));
+      if (isAsset(address)) {
+        if (request.destination === 'script' || request.destination === 'style'
+          || /\.(?:m?js|css)$/i.test(address.pathname)) event.respondWith(freshAsset(event, assets));
+        else event.respondWith(staleWhileRevalidate(event, assets));
+      }
     });
   }
 
