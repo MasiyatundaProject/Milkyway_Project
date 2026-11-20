@@ -16,6 +16,10 @@ const uuidList = (value, max = 255) => {
   return [...new Set(list.filter(isUuid).map(id => id.toLowerCase()))].slice(0, max);
 };
 const groupId = (body, query) => requireUuid(String(body.group || body.id || query.id || query.group || ''), 'group');
+async function requireActiveGroupMember(ctx, group) {
+  const rows = await ctx.rest(`mw_dm_group_members?select=join_status&group_id=${eq(group)}&user_id=${eq(ctx.user.id)}&limit=1`);
+  if (rows?.[0]?.join_status !== 'active') throw new ApiError(403, 'Active group membership is required.');
+}
 const missingGroupAvatarColumn = error => error?.status === 400
   && /avatar_url/i.test(String(error.message || ''))
   && /(does not exist|schema cache|could not find)/i.test(String(error.message || ''));
@@ -177,6 +181,38 @@ export default route({
     // A retried send with the same client id is ignored rather than duplicated.
     const rows = await ctx.rest('mw_dm_group_messages?on_conflict=id', { method: 'POST', body: row, returning: true });
     return { message: rows?.[0] || { ...row, created_at: new Date().toISOString() } };
+  },
+
+  walkie: async ({ ctx, body }) => {
+    const group = requireUuid(String(body.group || ''), 'group');
+    const id = requireUuid(String(body.id || ''), 'message');
+    const mediaType = String(body.mediaType || '').split(';', 1)[0].trim().toLowerCase();
+    if (!['audio/webm', 'audio/ogg', 'audio/mp4', 'audio/mpeg', 'audio/aac', 'audio/wav'].includes(mediaType)) {
+      throw new ApiError(400, 'Unsupported Walkie-Talkie audio type.');
+    }
+    const storagePath = `${group}/${ctx.user.id}/${id}`;
+    if (body.storagePath !== storagePath) throw new ApiError(400, 'Invalid Walkie-Talkie upload path.');
+    await requireActiveGroupMember(ctx, group);
+    const row = {
+      id, group_id: group, sender_id: ctx.user.id, body: 'Walkie-Talkie transmission',
+      message_type: 'voice_note', media_url: '', media_type: mediaType,
+      media_metadata: { walkie: true, storage_path: storagePath },
+    };
+    const rows = await ctx.rest('mw_dm_group_messages?on_conflict=id', {
+      method: 'POST', body: row, returning: true,
+    });
+    return { message: rows?.[0] || { ...row, created_at: new Date().toISOString() } };
+  },
+
+  'walkie-history': async ({ ctx, query, body }) => {
+    const group = groupId(body, query);
+    await requireActiveGroupMember(ctx, group);
+    const walkieFilter = encodeURIComponent('media_metadata->>walkie');
+    const rows = await ctx.rest(
+      `mw_dm_group_messages?select=id,group_id,sender_id,body,created_at,message_type,media_type,media_metadata&group_id=${eq(group)}&message_type=eq.voice_note&${walkieFilter}=eq.true&order=created_at.desc&limit=100`,
+    );
+    const message = (rows || []).find(row => row.media_metadata?.storage_path === `${group}/${row.sender_id}/${row.id}`);
+    return { message: message || null };
   },
 
   messages: async ({ ctx, query, body }) => {

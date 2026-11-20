@@ -901,9 +901,11 @@ html[data-low-end] .create-orb, html[data-low-end] .gift-card, html[data-low-end
 .walkie-sheet { max-height: min(82dvh, 620px); }
 .walkie-sheet .sheet-body { align-items: center; padding-bottom: 12px; }
 .walkie-target { align-self: stretch; }
-.walkie-hint, .walkie-status { margin: 0; text-align: center; }
+.walkie-hint, .walkie-status, .walkie-speaker { margin: 0; text-align: center; }
 .walkie-hint { color: var(--muted); font-size: 13px; }
 .walkie-status { min-height: 20px; font-size: 13px; }
+.walkie-speaker { color: var(--accent, #ff6b85); font-size: 14px; font-weight: 700; }
+.walkie-player { width: min(100%, 360px); }
 .walkie-talk-button { width: min(190px, 54vw); aspect-ratio: 1; display: grid; align-content: center; justify-items: center; gap: 8px; border: 3px solid rgba(255,255,255,.3); border-radius: 50%; background: linear-gradient(145deg, #f34162, #b9183a); color: #fff; box-shadow: 0 10px 28px rgba(185,24,58,.38); font-size: 17px; font-weight: 800; touch-action: none; user-select: none; -webkit-user-select: none; }
 .walkie-talk-button svg { width: 38px; height: 38px; }
 .walkie-talk-button:active, .walkie-talk-button.is-recording { transform: scale(.96); background: #ef234b; box-shadow: 0 0 0 8px rgba(239,35,75,.18), 0 10px 30px rgba(185,24,58,.45); }

@@ -4,6 +4,8 @@ import { accessToken, api, auth, supabase } from '../core/net.js';
 import { identifyMediaFile } from '../core/media-files.js';
 
 const extension = name => String(name || '').split('.').pop()?.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 10) || 'bin';
+const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+const WALKIE_TYPES = new Set(['audio/webm', 'audio/ogg', 'audio/mp4', 'audio/mpeg', 'audio/aac', 'audio/wav']);
 
 export async function uploadChatMedia(file, { id, viewOnce = false } = {}) {
   if (!auth.userId || !file || !id) throw new Error('Sign in and select a media file first.');
@@ -32,6 +34,39 @@ export async function removeChatMedia(media) {
   const client = await supabase();
   const result = await client.storage.from(media.bucket).remove([media.path]);
   if (result.error) throw new Error(result.error.message || 'Could not remove the uploaded media.');
+}
+
+export async function uploadGroupWalkieMedia(group, file, id) {
+  if (!auth.userId || !UUID.test(String(group || '')) || !UUID.test(String(id || '')) || !file) {
+    throw new Error('Sign in and select a group before sending a transmission.');
+  }
+  const info = await identifyMediaFile(file);
+  const mediaType = String(info.type || file.type || '').split(';', 1)[0].trim().toLowerCase();
+  if (info.kind !== 'audio' || !WALKIE_TYPES.has(mediaType)) {
+    throw new Error('Choose a supported audio recording.');
+  }
+  const path = `${group}/${auth.userId}/${id}`;
+  const client = await supabase();
+  const result = await client.storage.from('mw-group-walkie').upload(path, file, {
+    contentType: mediaType, cacheControl: '0', upsert: false,
+  });
+  if (result.error) throw new Error(result.error.message || 'Walkie-Talkie upload failed.');
+  return { path, mediaType };
+}
+
+export async function downloadGroupWalkieMedia(path) {
+  const client = await supabase();
+  const result = await client.storage.from('mw-group-walkie').download(path);
+  if (result.error) throw new Error(result.error.message || 'Could not load this group transmission.');
+  if (!result.data) throw new Error('The group transmission is unavailable.');
+  return result.data;
+}
+
+export async function removeGroupWalkieMedia(path) {
+  if (!path) return;
+  const client = await supabase();
+  const result = await client.storage.from('mw-group-walkie').remove([path]);
+  if (result.error) throw new Error(result.error.message || 'Could not remove the unlinked transmission.');
 }
 
 export async function sendViewOnce(options) {

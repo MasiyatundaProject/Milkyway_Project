@@ -76,8 +76,9 @@ test('DM media notes include private one-view storage and recording controls', (
   assert.match(api, /mw_message_complete_once/);
 });
 
-test('Walkie-Talkie uses hold-to-record controls and the existing DM/group voice-note pipeline', () => {
+test('Walkie-Talkie uses hold-to-record controls and sends through DM and protected group pipelines', () => {
   const walkie = readFileSync(new URL('../milkyway/app/ui/walkie-talkie.js', import.meta.url), 'utf8');
+  const groups = readFileSync(new URL('../milkyway/app/data/groups.js', import.meta.url), 'utf8');
   const main = readFileSync(new URL('../milkyway/app/main.js', import.meta.url), 'utf8');
   const shell = readFileSync(new URL('../milkyway/index.html', import.meta.url), 'utf8');
   const composer = readFileSync(new URL('../milkyway/app/ui/chat-composer.js', import.meta.url), 'utf8');
@@ -85,7 +86,12 @@ test('Walkie-Talkie uses hold-to-record controls and the existing DM/group voice
   assert.match(walkie, /pointerdown/);
   assert.match(walkie, /pointerup/);
   assert.match(walkie, /sendDirectMedia/);
-  assert.match(walkie, /sendGroupMedia/);
+  assert.match(walkie, /sendGroupWalkie/);
+  assert.match(walkie, /loadLatestGroupWalkie/);
+  assert.match(walkie, /downloadGroupWalkie/);
+  assert.match(walkie, /#stopGroupListening/);
+  assert.match(groups, /filter: `group_id=eq\.\$\{id\}`/);
+  assert.match(groups, /removeChannel\(entry\.channel\)/);
   assert.match(walkie, /cancelRecording\(\)/);
   assert.match(main, /#walkieEntry/);
   assert.match(shell, /id="walkieEntry"/);
@@ -95,6 +101,19 @@ test('Walkie-Talkie uses hold-to-record controls and the existing DM/group voice
   assert.match(styles, /\.walkie-label \{[^}]*font-size: 9px/);
   assert.match(styles, /\.walkie-entry\.hide-label \.walkie-label \{ display: none; \}/);
   assert.match(styles, /\.walkie-talk-button/);
+});
+
+test('Group Walkie audio is membership-authorized and stored privately', () => {
+  const migration = readFileSync(new URL('../supabase/migrations/20261210_milkyway_group_walkie.sql', import.meta.url), 'utf8');
+  const groups = readFileSync(new URL('../api/milkyway-groups.js', import.meta.url), 'utf8');
+  const media = readFileSync(new URL('../milkyway/app/data/chat-media.js', import.meta.url), 'utf8');
+  assert.match(migration, /'mw-group-walkie', 'mw-group-walkie', false/);
+  assert.match(migration, /mw_dm_is_group_member/);
+  assert.match(groups, /requireActiveGroupMember/);
+  assert.match(groups, /body\.storagePath !== storagePath/);
+  assert.match(groups, /walkie-history/);
+  assert.match(media, /from\('mw-group-walkie'\)\.download/);
+  assert.match(media, /from\('mw-group-walkie'\)\.upload/);
 });
 
 test('Watch Together synchronizes authorized chat playback and cleans up its player', () => {
