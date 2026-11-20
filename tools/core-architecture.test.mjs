@@ -25,6 +25,7 @@ test('group management schema and UI implement guarded joins, invitations and co
   const data = readFileSync(new URL('../milkyway/app/data/groups.js', import.meta.url), 'utf8');
   assert.match(migration, /join_mode in \('open', 'request_approval', 'invite_only'\)/);
   assert.match(migration, /add column if not exists avatar_url text not null default ''/);
+  assert.match(migration, /add column if not exists join_mode text not null default 'invite_only'/);
   assert.match(migration, /role in \('admin', 'co_admin', 'member'\)/);
   assert.match(migration, /members_can_invite/);
   assert.match(migration, /mw_group_join_request_decide/);
@@ -43,8 +44,9 @@ test('group management schema and UI implement guarded joins, invitations and co
   assert.match(view, /decideGroupRequest/);
   assert.match(view, /sendGroupMessage/);
   assert.match(data, /mw_dm_group_messages/);
-  assert.match(api, /missingGroupAvatarColumn/);
-  assert.match(api, /mw_dm_groups\(id,name,caption,join_mode,created_at\)/);
+  assert.match(api, /missingGroupColumn/);
+  assert.match(api, /\['id', 'name', 'caption', \.\.\.optionalColumns, 'created_at'\]/);
+  assert.match(api, /optionalColumns\.delete\(missing\)/);
 });
 
 test('DM media notes include private one-view storage and recording controls', () => {
@@ -232,7 +234,7 @@ test('group creation API validates join mode and delegates creation to the secur
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test('group list keeps Walkie-Talkie conversations available when avatar_url is missing', async () => {
+test('group list keeps Walkie-Talkie conversations available when newer group columns are missing', async () => {
   const originalFetch = globalThis.fetch;
   const urls = [];
   globalThis.fetch = async input => {
@@ -246,10 +248,16 @@ test('group list keeps Walkie-Talkie conversations available when avatar_url is 
           message: 'column mw_dm_groups_1.avatar_url does not exist',
         }), { status: 400, headers: { 'Content-Type': 'application/json' } });
       }
+      if (url.includes('join_mode')) {
+        return new Response(JSON.stringify({
+          code: '42703',
+          message: 'column mw_dm_groups_1.join_mode does not exist',
+        }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+      }
       return new Response(JSON.stringify([{
         role: 'member',
         join_status: 'active',
-        mw_dm_groups: { id: P(97), name: 'Community', caption: '', join_mode: 'invite_only' },
+        mw_dm_groups: { id: P(97), name: 'Community', caption: '' },
       }]), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
     throw new Error(`Unexpected request: ${url}`);
@@ -262,10 +270,13 @@ test('group list keeps Walkie-Talkie conversations available when avatar_url is 
     const result = await response.json();
     assert.equal(result.groups[0].name, 'Community');
     assert.equal(result.groups[0].avatar_url, '');
+    assert.equal(result.groups[0].join_mode, 'invite_only');
     const groupQueries = urls.filter(url => url.includes('/rest/v1/mw_dm_group_members?'));
-    assert.equal(groupQueries.length, 2);
+    assert.equal(groupQueries.length, 3);
     assert.match(groupQueries[0], /avatar_url/);
+    assert.match(groupQueries[1], /join_mode/);
     assert.doesNotMatch(groupQueries[1], /avatar_url/);
+    assert.doesNotMatch(groupQueries[2], /avatar_url|join_mode/);
   } finally { globalThis.fetch = originalFetch; }
 });
 

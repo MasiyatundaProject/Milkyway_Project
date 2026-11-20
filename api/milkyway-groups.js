@@ -16,18 +16,24 @@ const uuidList = (value, max = 255) => {
   return [...new Set(list.filter(isUuid).map(id => id.toLowerCase()))].slice(0, max);
 };
 const groupId = (body, query) => requireUuid(String(body.group || body.id || query.id || query.group || ''), 'group');
-const missingGroupAvatarColumn = error => error?.status === 400
-  && /avatar_url/i.test(String(error.message || ''))
+const missingGroupColumn = (error, column) => error?.status === 400
+  && new RegExp(`(?:mw_dm_groups(?:_\\d+)?\\.)?${column}`, 'i').test(String(error.message || ''))
   && /(does not exist|schema cache|could not find)/i.test(String(error.message || ''));
 
 async function listGroupMemberships(ctx) {
   const filters = `user_id=${eq(ctx.user.id)}&limit=500`;
-  try {
-    return await ctx.rest(`mw_dm_group_members?select=role,join_status,joined_at,mw_dm_groups(id,name,caption,avatar_url,join_mode,created_at)&${filters}`);
-  } catch (error) {
-    if (!missingGroupAvatarColumn(error)) throw error;
-    console.warn('[groups] mw_dm_groups.avatar_url is unavailable; loading groups without avatars');
-    return ctx.rest(`mw_dm_group_members?select=role,join_status,joined_at,mw_dm_groups(id,name,caption,join_mode,created_at)&${filters}`);
+  const optionalColumns = new Set(['avatar_url', 'join_mode']);
+  while (true) {
+    const groupColumns = ['id', 'name', 'caption', ...optionalColumns, 'created_at'];
+    const select = `role,join_status,joined_at,mw_dm_groups(${groupColumns.join(',')})`;
+    try {
+      return await ctx.rest(`mw_dm_group_members?select=${select}&${filters}`);
+    } catch (error) {
+      const missing = [...optionalColumns].find(column => missingGroupColumn(error, column));
+      if (!missing) throw error;
+      optionalColumns.delete(missing);
+      console.warn(`[groups] mw_dm_groups.${missing} is unavailable; loading groups without it`);
+    }
   }
 }
 
