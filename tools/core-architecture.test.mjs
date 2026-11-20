@@ -258,11 +258,14 @@ test('Cloudflare Pages API passes its LiveKit bindings through to the DM call to
     const payload = await response.json();
     assert.equal(response.status, 200);
     assert.equal(payload.serverUrl, 'wss://binding-live.example.test');
+    assert.equal(payload.callType, 'video');
+    assert.equal(payload.videoEnabled, true);
     const claims = JSON.parse(Buffer.from(payload.token.split('.')[1], 'base64url'));
     assert.equal(claims.iss, 'binding-key');
     assert.equal(claims.sub, A);
     assert.equal(claims.video.room, `dm-call-${A}-${B}`);
     assert.deepEqual(claims.video.canPublishSources, ['camera', 'microphone']);
+    assert.deepEqual(JSON.parse(claims.metadata), { avatar: '', callType: 'video', videoEnabled: true });
     const missingResponse = await runApi('milkyway-call', new Request('https://www.masiyatunda.com/api/milkyway-call?action=start', {
       method: 'POST',
       headers: { authorization: 'Bearer test-session', apikey: 'test-public-key', 'Content-Type': 'application/json' },
@@ -690,6 +693,14 @@ test('DM call connection uses authenticated LiveKit tokens and reports server co
   assert.match(liveKit, /ctx\.env/);
   assert.match(liveKit, /url\.pathname === '\/'.*!url\.username/);
   assert.match(callView, /callAccessToken\(roomName, this\.call\.id, auth\.name\)/);
+  assert.match(callApi, /offer: \{ transport: 'livekit', mode: callType, callType, videoEnabled, name \}/);
+  assert.match(callApi, /payload: \{ id, kind, callType, videoEnabled: callType === 'video' \}/);
+  assert.match(callView, /callType, videoEnabled, name: auth\.name/);
+  assert.match(callView, /#startRingtone/);
+  assert.match(callView, /#stopRingtone/);
+  assert.match(callView, /track\.attach\(element\)/);
+  assert.match(callView, /element\.autoplay = true/);
+  assert.match(callView, /element\.playsInline = true/);
   assert.doesNotMatch(callView, /await directCallToken/);
   assert.doesNotMatch(callView, /directTokenEndpoint|directCallToken/);
   assert.match(callView, /await room\.connect\(access\.serverUrl, access\.token/);

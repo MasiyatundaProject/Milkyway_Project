@@ -28,6 +28,7 @@ async function callAccessToken(roomName, callId, name) {
 const RING_MS = 55_000;
 const callApi = (action, body) => api(`${CALL_API}?action=${action}`, body ? { method: 'POST', body, timeout: 15000 } : { timeout: 12000 });
 const getCall = id => api(`${CALL_API}?id=${encodeURIComponent(id)}`, { timeout: 10000 }).then(data => data?.call || null);
+const callTypeOf = call => (call?.offer?.callType ?? call?.offer?.mode) === 'video' ? 'video' : 'audio';
 
 const icons = {
   phone: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1L6.6 10.8z"/></svg>',
@@ -37,10 +38,11 @@ const icons = {
 };
 
 class CallScreen {
-  constructor({ call, peer, mode, incoming }) {
+  constructor({ call, peer, callType, mode, incoming }) {
     this.call = call;
     this.peer = peer;
-    this.mode = mode;
+    this.callType = callType || (mode === 'video' || callTypeOf(call) === 'video' ? 'video' : 'audio');
+    this.mode = this.callType;
     this.incoming = incoming;
     this.closed = false;
     this.connecting = false;
@@ -51,10 +53,59 @@ class CallScreen {
     this.facing = 'user';
     this.#build();
     playback.suspend(true);
-    if (incoming) this.#setState('incoming');
+    if (incoming) {
+      this.#setState('incoming');
+      this.#startRingtone();
+      this.ringTimer = setTimeout(() => this.hangUp('missed'), RING_MS);
+    }
     else { this.#setState('ringing'); this.#connect(); this.ringTimer = setTimeout(() => this.hangUp('missed'), RING_MS); }
     this.poll = setInterval(() => this.#check(), 5000);
     if (incoming) navigator.vibrate?.([400, 200, 400, 200, 400]);
+  }
+
+  #startRingtone() {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    try {
+      const context = this.ringtoneContext = new AudioContext();
+      const oscillator = this.ringtoneOscillator = context.createOscillator();
+      const gain = this.ringtoneGain = context.createGain();
+      oscillator.type = 'sine';
+      oscillator.frequency.value = 440;
+      gain.gain.value = 0.0001;
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start();
+      const ring = () => {
+        const now = context.currentTime;
+        gain.gain.cancelScheduledValues(now);
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(0.14, now + 0.03);
+        gain.gain.setValueAtTime(0.14, now + 0.22);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.27);
+        gain.gain.setValueAtTime(0.0001, now + 0.38);
+        gain.gain.exponentialRampToValueAtTime(0.14, now + 0.41);
+        gain.gain.setValueAtTime(0.14, now + 0.6);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.65);
+      };
+      ring();
+      this.ringtoneTimer = setInterval(ring, 1600);
+      if (context.state === 'suspended') context.resume().catch(error => console.warn('[call] ringtone playback blocked', error));
+    } catch (error) {
+      console.warn('[call] ringtone unavailable', error);
+      this.#stopRingtone();
+    }
+  }
+
+  #stopRingtone() {
+    clearInterval(this.ringtoneTimer);
+    this.ringtoneTimer = null;
+    try { this.ringtoneOscillator?.stop(); } catch {}
+    this.ringtoneOscillator = null;
+    const context = this.ringtoneContext;
+    this.ringtoneContext = null;
+    this.ringtoneGain = null;
+    if (context && context.state !== 'closed') context.close().catch(error => console.warn('[call] ringtone cleanup failed', error));
   }
 
   #build() {
@@ -147,15 +198,27 @@ class CallScreen {
           this.#showConnectionError(new Error(`LiveKit disconnected${reason ? `: ${reason}` : '.'}`));
         })
         .on(RoomEvent.LocalTrackPublished, publication => {
-          if (publication.track?.kind === 'video') { this.local.replaceChildren(publication.track.attach()); }
+          if (publication.track?.kind === 'video') this.#attachLocalVideo(publication.track);
         });
       await room.connect(access.serverUrl, access.token, { autoSubscribe: true });
       this.roomConnected = true;
       if (this.closed) { this.#disconnectRoom(); return; }
-      try {
-        await room.localParticipant.setMicrophoneEnabled(this.micOn);
-        if (this.mode === 'video') await room.localParticipant.setCameraEnabled(this.camOn, { facingMode: this.facing });
-      } catch { toast(t('micNeeded')); }
+      try { await room.localParticipant.setMicrophoneEnabled(this.micOn); }
+      catch (error) {
+        console.warn('[call] microphone setup failed', error);
+        toast(error?.message || t('micNeeded'));
+      }
+      if (this.callType === 'video' || access.videoEnabled) {
+        try {
+          this.camOn = true;
+          await room.localParticipant.setCameraEnabled(true, { facingMode: this.facing });
+        } catch (error) {
+          this.camOn = false;
+          this.camBtn.classList.add('off');
+          this.camBtn.innerHTML = icons.camOff;
+          toast(error?.message || t('callFailed'));
+        }
+      }
       if (room.remoteParticipants.size) this.#peerJoined();
       room.remoteParticipants.forEach(participant => participant.trackPublications.forEach(publication => publication.track && this.#attachRemote(publication.track, Track)));
     } catch (error) {
@@ -216,15 +279,28 @@ class CallScreen {
     if (this.state !== 'connected') this.#setState('connected');
   }
 
+  #attachLocalVideo(track) {
+    const element = document.createElement('video');
+    element.autoplay = true;
+    element.playsInline = true;
+    element.muted = true;
+    track.attach(element);
+    this.local.replaceChildren(element);
+    this.local.hidden = false;
+  }
+
   #attachRemote(track, Track) {
-    const element = track.attach();
     if (track.kind === Track.Kind.Audio) {
+      const element = track.attach();
       this.audioBox.append(element);
       element.play().then(() => { if (!this.closed) this.playAudioBtn.hidden = true; })
         .catch(() => { if (!this.closed) this.playAudioBtn.hidden = false; });
       return;
     }
+    const element = document.createElement('video');
+    element.autoplay = true;
     element.playsInline = true;
+    track.attach(element);
     this.remote.replaceChildren(element);
     this.root.classList.add('has-video');
   }
@@ -238,6 +314,8 @@ class CallScreen {
 
   async #accept() {
     navigator.vibrate?.(0);
+    clearTimeout(this.ringTimer);
+    this.#stopRingtone();
     this.#setState('connecting');
     try {
       const result = await callApi('accept', { id: this.call.id });
@@ -251,6 +329,7 @@ class CallScreen {
 
   async #decline() {
     navigator.vibrate?.(0);
+    this.#stopRingtone();
     callApi('decline', { id: this.call.id }).catch(() => {});
     this.finish('declined');
   }
@@ -313,6 +392,7 @@ class CallScreen {
     this.closed = true;
     navigator.vibrate?.(0);
     clearTimeout(this.ringTimer); clearInterval(this.poll); clearInterval(this.clock);
+    this.#stopRingtone();
     this.#disconnectRoom();
     this.#setState(state);
     this.root.classList.add('closing');
@@ -330,9 +410,11 @@ export const calls = {
     if (calls.active) { toast(t('calling')); return; }
     if (!navigator.mediaDevices?.getUserMedia) { toast(t('micNeeded')); return; }
     try {
-      const result = await callApi('start', { callee: peer, mode: mode === 'video' ? 'video' : 'audio', name: auth.name });
+      const callType = mode === 'video' ? 'video' : 'audio';
+      const videoEnabled = callType === 'video';
+      const result = await callApi('start', { callee: peer, mode: callType, callType, videoEnabled, name: auth.name });
       if (!result?.call) throw new Error(t('callFailed'));
-      calls.active = new CallScreen({ call: result.call, peer, mode, incoming: false });
+      calls.active = new CallScreen({ call: result.call, peer, callType: result.callType || callType, incoming: false });
     } catch (error) { toast(error?.message || t('callFailed')); }
   },
 
@@ -343,7 +425,7 @@ export const calls = {
       const call = typeof callOrId === 'string' ? await getCall(callOrId) : callOrId;
       if (!call || call.status !== 'ringing' || call.callee_id !== auth.userId || calls.active) return;
       if (Date.now() - Date.parse(call.created_at) > RING_MS) return;
-      calls.active = new CallScreen({ call, peer: call.caller_id, mode: call.offer?.mode === 'video' ? 'video' : 'audio', incoming: true });
+      calls.active = new CallScreen({ call, peer: call.caller_id, callType: callTypeOf(call), incoming: true });
     } catch {}
   },
 
@@ -358,7 +440,7 @@ export const calls = {
         return;
       }
       if (calls.active) return;
-      calls.active = new CallScreen({ call, peer: call.caller_id, mode: call.offer?.mode === 'video' ? 'video' : 'audio', incoming: true });
+      calls.active = new CallScreen({ call, peer: call.caller_id, callType: callTypeOf(call), incoming: true });
       await calls.active.acceptFromNotification();
     } catch (error) { console.warn('[call] Notification action failed.', error); }
   },
