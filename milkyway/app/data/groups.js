@@ -76,6 +76,14 @@ export async function deleteGroup(group) {
   return request('delete', { method: 'POST', body: { group } });
 }
 
+export async function deleteGroupMessage(group, id) {
+  return request('delete-message', { method: 'POST', body: { group, id } });
+}
+
+export async function clearGroupMessages(group) {
+  return request('clear-messages', { method: 'POST', body: { group } });
+}
+
 export async function loadGroupMessages(group) {
   const data = await request('messages', { timeout: 12000 }, `&group=${encodeURIComponent(group)}`);
   return (data?.messages || []).slice().reverse();

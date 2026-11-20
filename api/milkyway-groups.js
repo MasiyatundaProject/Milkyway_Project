@@ -22,6 +22,18 @@ const missingGroupColumn = (error, column) => error?.status === 400
 const activeMember = (member, group, userId) => ['active', 'approved'].includes(String(member?.join_status || '').toLowerCase())
   || ['admin', 'owner'].includes(String(member?.role || '').toLowerCase())
   || group?.created_by === userId;
+const groupAdmin = (member, group, userId) => group?.created_by === userId
+  || (['admin', 'co_admin', 'owner'].includes(String(member?.role || '').toLowerCase())
+    && (['active', 'approved'].includes(String(member?.join_status || '').toLowerCase())
+      || ['admin', 'co_admin', 'owner'].includes(String(member?.role || '').toLowerCase())));
+
+async function groupAuthorization(ctx, group) {
+  const [groups, members] = await Promise.all([
+    ctx.rest(`mw_dm_groups?select=id,created_by&id=${eq(group)}&limit=1`),
+    ctx.rest(`mw_dm_group_members?select=role,join_status&group_id=${eq(group)}&user_id=${eq(ctx.user.id)}&limit=1`),
+  ]);
+  return { group: groups?.[0], member: members?.[0] };
+}
 
 async function listGroupMemberships(ctx) {
   const filters = `user_id=${eq(ctx.user.id)}&limit=500`;
@@ -188,7 +200,22 @@ export default route({
   },
 
   delete: async ({ ctx, body, query }) => {
-    await ctx.rpc('mw_group_delete', { p_group: groupId(body, query) });
+    const group = groupId(body, query);
+    const access = await groupAuthorization(ctx, group);
+    if (!access.group || !groupAdmin(access.member, access.group, ctx.user.id)) {
+      throw new ApiError(403, 'Only group admins or the creator can delete the group.');
+    }
+    await ctx.rpc('mw_group_delete', { p_group: group });
+    return { ok: true };
+  },
+
+  'clear-messages': async ({ ctx, body, query }) => {
+    const group = groupId(body, query);
+    const access = await groupAuthorization(ctx, group);
+    if (!access.group || !groupAdmin(access.member, access.group, ctx.user.id)) {
+      throw new ApiError(403, 'Only group admins or the creator can clear messages.');
+    }
+    await ctx.rest(`mw_dm_group_messages?group_id=${eq(group)}`, { method: 'DELETE' });
     return { ok: true };
   },
 
@@ -258,7 +285,17 @@ export default route({
 
   'delete-message': async ({ ctx, body }) => {
     const id = requireUuid(String(body.id || ''), 'message');
-    await ctx.rest(`mw_dm_group_messages?id=${eq(id)}&sender_id=${eq(ctx.user.id)}`, { method: 'DELETE' });
+    const rows = await ctx.rest(`mw_dm_group_messages?select=id,group_id,sender_id&id=${eq(id)}&limit=1`);
+    const message = rows?.[0];
+    if (!message) return { ok: true };
+    if (body.group && requireUuid(String(body.group), 'group') !== message.group_id) {
+      throw new ApiError(400, 'Message does not belong to this group.');
+    }
+    const access = await groupAuthorization(ctx, message.group_id);
+    if (message.sender_id !== ctx.user.id && (!access.group || !groupAdmin(access.member, access.group, ctx.user.id))) {
+      throw new ApiError(403, 'Only the sender or a group admin can delete this message.');
+    }
+    await ctx.rest(`mw_dm_group_messages?id=${eq(id)}&group_id=${eq(message.group_id)}`, { method: 'DELETE' });
     return { ok: true };
   },
 });
