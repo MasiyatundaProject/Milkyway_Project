@@ -260,6 +260,16 @@ html[data-muted] .mute-toggle .i-sound, html:not([data-muted]) .mute-toggle .i-m
 .live-audio { position: fixed; left: -2px; bottom: 0; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
 .live-cover { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 12px; }
 .live-cover-title { margin: 0; font-weight: 700; max-width: 80%; text-align: center; }
+.live-resting { position: absolute; z-index: 2; inset: 0; display: grid; align-content: center; justify-items: center; gap: 5px; padding: 72px 24px 96px; text-align: center; background: radial-gradient(70% 55% at 50% 48%, rgba(35,25,83,.92), rgba(7,9,28,.94)); }
+.live-resting[hidden] { display: none !important; }
+.live-resting-art { width: min(240px, 68vw); aspect-ratio: 4 / 3; background: var(--mw-live-rest-image, none) center / contain no-repeat; animation: live-rest-float 8s ease-in-out infinite; }
+.live-resting-art svg { width: 100%; height: 100%; filter: drop-shadow(0 0 16px rgba(139,92,246,.35)); }
+.live-resting-title { font-size: 16px; letter-spacing: .02em; }
+.live-resting-message { max-width: 28ch; font-size: 13px; color: rgba(255,255,255,.72); }
+@keyframes live-rest-float { 50% { transform: translateY(-7px); } }
+/* Optional custom artwork: set --mw-live-rest-image to a url() for a project-local image; the inline SVG remains the fallback. */
+:root { --mw-live-rest-image: none; }
+@media (prefers-reduced-motion: reduce) { .live-resting-art { animation: none; } }
 .live-badge, .live-tag { background: var(--accent); color: #fff; font-weight: 800; font-size: 11px; letter-spacing: .05em; padding: 2px 6px; border-radius: 4px; }
 .live-host-background { position: absolute; z-index: 0; inset: 0; overflow: hidden; background: radial-gradient(120% 90% at 50% 0%, #2d1a78, var(--midnight)); }
 .live-host-background img, .live-host-background video { display: block; width: 100%; height: 100%; object-fit: cover; }

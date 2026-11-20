@@ -873,6 +873,30 @@ test('LIVE guest stage grants publisher permissions and renders allocated guest 
   assert.match(liveSession, /static warm\(live\)/);
 });
 
+test('LIVE hidden-tab lifecycle rests viewers, keeps audio during grace, and ends inactive hosts', () => {
+  const liveView = readFileSync(new URL('../milkyway/app/ui/live-view.js', import.meta.url), 'utf8');
+  const config = readFileSync(new URL('../milkyway/app/config.js', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../milkyway/app/app.css', import.meta.url), 'utf8');
+  const index = readFileSync(new URL('../milkyway/index.html', import.meta.url), 'utf8');
+  const worker = readFileSync(new URL('../milkyway/sw.js', import.meta.url), 'utf8');
+  assert.match(config, /viewerHiddenGraceMs: 60_000/);
+  assert.match(config, /hostHiddenGraceMs: 60_000/);
+  assert.match(config, /hostIdleGraceMs: 300_000/);
+  assert.match(liveView, /document\.addEventListener\('visibilitychange'/);
+  assert.match(liveView, /window\.addEventListener\('blur'/);
+  assert.match(liveView, /slide\.classList\.add\('resting'\)/);
+  assert.match(liveView, /setTimeout\(\(\) => \{[\s\S]*this\.#leave\(\);[\s\S]*VIEWER_HIDDEN_GRACE_MS/);
+  assert.match(liveView, /HOST_HIDDEN_GRACE_MS/);
+  assert.match(liveView, /HOST_IDLE_GRACE_MS/);
+  assert.match(liveView, /const localLeave = session\.leave\(\);[\s\S]*session\.end\(\)\.catch[\s\S]*endSession\(room\)\.catch[\s\S]*await localLeave/);
+  assert.match(liveView, /removeEventListener\('visibilitychange', onHostVisibility\)/);
+  assert.match(css, /\.live-resting-art svg/);
+  assert.match(css, /--mw-live-rest-image/);
+  assert.match(index, /app\/app\.css\?v=29/);
+  assert.match(worker, /milkyway-v240-live-rest-lifecycle/);
+  assert.match(worker, /app\/app\.css\?v=29/);
+});
+
 test('LIVE settings persist guest slots and featured host backgrounds with schema repair', async () => {
   const hostId = A;
   const room = 'mw-video-live-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';

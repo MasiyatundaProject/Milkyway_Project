@@ -38,6 +38,13 @@ const defaults = {
       'https://unpkg.com/livekit-client@2/dist/livekit-client.umd.js',
     ],
   },
+  live: {
+    // Override these millisecond durations through window.MW_CONFIG.live when needed.
+    // Viewers keep listening briefly after hiding a tab; hosts are ended sooner when hidden and later when idle.
+    viewerHiddenGraceMs: 60_000,
+    hostHiddenGraceMs: 60_000,
+    hostIdleGraceMs: 300_000,
+  },
   cloudinary: {
     // Set cloudName to deliver images/posters through Cloudinary fetch (f_auto, q_auto, sized). Empty = off.
     cloudName: '',
