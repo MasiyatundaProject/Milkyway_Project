@@ -13,6 +13,14 @@ let channel = null;
 const groupChannels = new Map();
 
 const request = (action, options = {}, query = '') => api(`${endpoint}?action=${encodeURIComponent(action)}${query}`, options);
+export function isActiveGroupMember(membership, { userId = auth.userId, createdBy = membership?.created_by } = {}) {
+  const status = String(membership?.join_status || '').toLowerCase();
+  const role = String(membership?.role || '').toLowerCase();
+  return ['active', 'approved'].includes(status)
+    || ['admin', 'owner'].includes(role)
+    || Boolean(userId && membership?.created_by === userId)
+    || Boolean(createdBy && membership?.user_id === createdBy);
+}
 const notify = (subscribers, payload) => subscribers.forEach(listener => {
   try { listener(payload); } catch (error) { console.error('[groups] message listener failed', error); }
 });
@@ -62,6 +70,10 @@ export async function joinGroup(group) {
 
 export async function leaveGroup(group) {
   return request('leave', { method: 'POST', body: { group } });
+}
+
+export async function deleteGroup(group) {
+  return request('delete', { method: 'POST', body: { group } });
 }
 
 export async function loadGroupMessages(group) {

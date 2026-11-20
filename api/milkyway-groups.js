@@ -16,13 +16,16 @@ const uuidList = (value, max = 255) => {
   return [...new Set(list.filter(isUuid).map(id => id.toLowerCase()))].slice(0, max);
 };
 const groupId = (body, query) => requireUuid(String(body.group || body.id || query.id || query.group || ''), 'group');
-const missingGroupAvatarColumn = error => error?.status === 400
-  && /avatar_url/i.test(String(error.message || ''))
+const missingGroupColumn = (error, column) => error?.status === 400
+  && new RegExp(`\\b${column}\\b`, 'i').test(String(error.message || ''))
   && /(does not exist|schema cache|could not find)/i.test(String(error.message || ''));
+const activeMember = (member, group, userId) => ['active', 'approved'].includes(String(member?.join_status || '').toLowerCase())
+  || ['admin', 'owner'].includes(String(member?.role || '').toLowerCase())
+  || group?.created_by === userId;
 
 async function listGroupMemberships(ctx) {
   const filters = `user_id=${eq(ctx.user.id)}&limit=500`;
-  const optionalColumns = new Set(['avatar_url', 'join_mode']);
+  const optionalColumns = new Set(['avatar_url', 'join_mode', 'created_by']);
   while (true) {
     const groupColumns = ['id', 'name', 'caption', ...optionalColumns, 'created_at'];
     const select = `role,join_status,joined_at,mw_dm_groups(${groupColumns.join(',')})`;
@@ -37,18 +40,45 @@ async function listGroupMemberships(ctx) {
   }
 }
 
+async function listCreatedGroups(ctx) {
+  const optionalColumns = new Set(['avatar_url', 'join_mode']);
+  while (true) {
+    const columns = ['id', 'name', 'caption', ...optionalColumns, 'created_by', 'created_at'];
+    try {
+      return await ctx.rest(`mw_dm_groups?select=${columns.join(',')}&created_by=${eq(ctx.user.id)}&order=created_at.desc&limit=500`);
+    } catch (error) {
+      const missing = [...optionalColumns].find(column => missingGroupColumn(error, column));
+      if (!missing) throw error;
+      optionalColumns.delete(missing);
+      console.warn(`[groups] mw_dm_groups.${missing} is unavailable; loading created groups without it`);
+    }
+  }
+}
+
 export default route({
   list: async ({ ctx }) => {
-    const rows = await listGroupMemberships(ctx);
-    const groups = (rows || [])
+    const [rows, created] = await Promise.all([listGroupMemberships(ctx), listCreatedGroups(ctx)]);
+    const groupsById = new Map((rows || [])
       .filter(row => row.mw_dm_groups)
-      .map(row => ({
-        id: row.mw_dm_groups.id, name: row.mw_dm_groups.name,
-        caption: row.mw_dm_groups.caption || '', avatar_url: row.mw_dm_groups.avatar_url || '',
-        join_mode: row.mw_dm_groups.join_mode || 'invite_only',
-        role: row.role, join_status: row.join_status || 'active',
-        created_at: row.mw_dm_groups.created_at,
-      }))
+      .map(row => {
+        const group = row.mw_dm_groups;
+        const member = { role: row.role, join_status: row.join_status || '' };
+        return [group.id, {
+          id: group.id, name: group.name, caption: group.caption || '',
+          avatar_url: group.avatar_url || '', join_mode: group.join_mode || 'invite_only',
+          created_by: group.created_by || '', role: row.role, join_status: row.join_status || '',
+          created_at: group.created_at,
+          is_active: activeMember(member, group, ctx.user.id),
+        }];
+      }));
+    for (const group of created || []) {
+      if (!groupsById.has(group.id)) groupsById.set(group.id, {
+        ...group, caption: group.caption || '', avatar_url: group.avatar_url || '',
+        join_mode: group.join_mode || 'invite_only', role: 'owner', join_status: 'approved',
+        is_active: true,
+      });
+    }
+    const groups = [...groupsById.values()]
       .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
     return { groups };
   },
@@ -72,13 +102,15 @@ export default route({
     ]);
     const group = groups?.[0];
     const mine = (members || []).find(member => member.user_id === ctx.user.id);
-    if (!group || (!mine && !['open', 'request_approval'].includes(group.join_mode))) throw new ApiError(404, 'Group not found.');
+    if (!group || (!mine && group.created_by !== ctx.user.id
+      && !['open', 'request_approval'].includes(group.join_mode))) throw new ApiError(404, 'Group not found.');
     return {
       group: {
         ...group, caption: group.caption || '', description: group.description || '',
         avatar_url: group.avatar_url || '', join_mode: group.join_mode || 'invite_only',
         members_can_invite: group.members_can_invite !== false,
-        role: mine?.role || '', join_status: mine?.join_status || '',
+        role: mine?.role || (group.created_by === ctx.user.id ? 'owner' : ''),
+        join_status: mine?.join_status || (group.created_by === ctx.user.id ? 'approved' : ''),
       },
       members: members || [], blocked: blocked || [],
     };

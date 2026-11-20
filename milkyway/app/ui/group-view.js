@@ -3,7 +3,7 @@ import { auth } from '../core/net.js';
 import { profiles } from '../data/profiles.js';
 import { searchPeople } from '../data/messages.js';
 import {
-  addGroupMembers, createGroup, decideGroupRequest, joinGroup, leaveGroup,
+  addGroupMembers, createGroup, decideGroupRequest, deleteGroup, isActiveGroupMember, joinGroup, leaveGroup,
   loadGroup, loadGroupMessages, onGroupMessage, removeGroupMember,
   sendGroupMedia, sendGroupMessage, sendGroupOneViewText, setGroupRole, updateGroup,
 } from '../data/groups.js';
@@ -19,7 +19,7 @@ const gearIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13a
 
 const button = (label, action, className = 'pill-btn') => h('button', { type: 'button', class: className, onclick: action }, label);
 const sectionTitle = label => h('h3', { class: 'group-section-title' }, label);
-const roleName = role => ({ admin: 'Admin', co_admin: 'Co-admin', member: 'Member' }[role] || 'Member');
+const roleName = role => ({ admin: 'Admin', co_admin: 'Co-admin', member: 'Member', owner: 'Owner' }[role] || 'Member');
 
 export class GroupCreateSheet {
   constructor(onCreated) {
@@ -116,8 +116,9 @@ export class GroupChatSheet {
       const [details, rows] = await Promise.all([loadGroup(groupId), loadGroupMessages(groupId)]);
       if (this.group?.id !== groupId) return;
       this.group = { ...group, ...details.group };
-      await profiles.many((details.members || []).filter(member => member.join_status === 'active').map(member => member.user_id));
-      this.subtitle.textContent = `${(details.members || []).filter(member => member.join_status === 'active').length} ${t('groupMembers').toLowerCase()}`;
+      const activeMembers = (details.members || []).filter(member => isActiveGroupMember(member, { createdBy: this.group.created_by }));
+      await profiles.many(activeMembers.map(member => member.user_id));
+      this.subtitle.textContent = `${activeMembers.length} ${t('groupMembers').toLowerCase()}`;
       this.messages.clear();
       rows.forEach(row => this.messages.set(row.id, row));
       this.#render();
@@ -242,10 +243,12 @@ class GroupManager {
 
   #render(data, profileMap) {
     const group = this.group;
-    const elevated = ['admin', 'co_admin'].includes(group.role);
+    const elevated = ['admin', 'co_admin', 'owner'].includes(group.role);
     const creator = group.created_by === auth.userId;
-    const active = data.members.filter(member => member.join_status === 'active');
-    const pending = data.members.filter(member => member.join_status === 'pending');
+    const active = data.members.filter(member => isActiveGroupMember(member, { createdBy: group.created_by }));
+    const activeIds = new Set(active.map(member => member.user_id));
+    const pending = data.members.filter(member => member.join_status === 'pending' && !activeIds.has(member.user_id));
+    const canDelete = creator || ['admin', 'owner'].includes(group.role);
     const members = h('div', { class: 'group-member-list' });
     for (const member of active) {
       const person = profileMap.get(member.user_id) || { name: 'MilkyWay', username: '', avatar: '' };
@@ -280,6 +283,7 @@ class GroupManager {
       sectionTitle(t('groupMembers')), members,
       elevated ? sectionTitle(`${t('joinRequests')} (${pending.length})`) : null,
       elevated ? (pending.length ? pendingList : h('p', { class: 'muted' }, t('noJoinRequests'))) : null,
+      canDelete ? button(t('deleteGroup'), () => this.#delete(), 'pill-btn danger') : null,
       button(t('leaveGroup'), () => this.#leave(), 'pill-btn'));
   }
 
@@ -380,12 +384,23 @@ class GroupManager {
       toast(t('leftGroup'));
     } catch (error) { toast(error?.message || t('groupActionFailed')); }
   }
+
+  async #delete() {
+    if (!confirm(`${t('deleteGroup')}?`)) return;
+    try {
+      await deleteGroup(this.group.id);
+      this.sheet.close();
+      this.onChanged?.();
+      this.onLeave?.();
+      toast(t('groupDeleted'));
+    } catch (error) { toast(error?.message || t('groupActionFailed')); }
+  }
 }
 
 export async function joinAndOpenGroup(group, onJoined, onPending) {
   try {
     const result = await joinGroup(group.id);
-    if (result.status === 'active') onJoined?.(group);
+    if (['active', 'approved'].includes(String(result.status || '').toLowerCase())) onJoined?.(group);
     else onPending?.();
   } catch (error) { toast(error?.message || t('groupActionFailed')); }
 }

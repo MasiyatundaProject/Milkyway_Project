@@ -7,7 +7,7 @@ import { profiles } from '../data/profiles.js';
 import { presence } from '../data/presence.js';
 import { loadThread, sendMessage, sendOneViewText, sendDirectMedia, markRead, onMessage, deleteForMe, searchPeople } from '../data/messages.js';
 import { consumeViewOnce } from '../data/chat-media.js';
-import { discoverGroups, joinGroup, loadGroups } from '../data/groups.js';
+import { discoverGroups, isActiveGroupMember, joinGroup, loadGroups } from '../data/groups.js';
 import { Sheet } from './sheet.js';
 import { h, icon, ago, avatar, formatDateTime, toast } from './dom.js';
 import { calls } from './call-view.js';
@@ -76,15 +76,17 @@ export class InboxView {
     const face = group.avatar_url
       ? h('img', { class: 'group-list-avatar', src: group.avatar_url, alt: '', loading: 'lazy' })
       : h('span', { class: 'group-list-avatar group-list-placeholder' }, '👥');
+    const active = isActiveGroupMember(group);
+    const pending = !active && group.join_status === 'pending';
     let statusAction;
-    if (group.join_status === 'active') {
+    if (active) {
       statusAction = () => this.groupChat.open(group);
     } else if (group.join_status === 'invited') {
       statusAction = () => joinAndOpenGroup(group, joined => { this.#loadGroups(); this.groupChat.open(joined); }, () => this.#loadGroups());
     }
-    const actionLabel = group.join_status === 'pending' ? t('requestPending')
+    const actionLabel = pending ? t('requestPending')
       : group.join_status === 'invited' ? t('acceptInvite') : t('openChat');
-    return h('div', { class: `group-list-row${group.join_status === 'pending' ? ' pending' : ''}` },
+    return h('div', { class: `group-list-row${pending ? ' pending' : ''}` },
       statusAction
         ? h('button', { class: 'group-list-open', type: 'button', onclick: statusAction }, face,
           h('span', { class: 'chat-text' }, h('b', {}, group.name), h('small', { class: 'muted' }, `${group.caption || t(`joinModeLabel_${group.join_mode}`)}`)))

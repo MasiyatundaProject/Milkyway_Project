@@ -5,7 +5,7 @@ import { auth } from '../core/net.js';
 import { bus } from '../core/events.js';
 import { profiles } from '../data/profiles.js';
 import {
-  downloadGroupWalkie, loadGroups, loadLatestGroupWalkie, onGroupMessage, sendGroupWalkie,
+  downloadGroupWalkie, isActiveGroupMember, loadGroups, loadLatestGroupWalkie, onGroupMessage, sendGroupWalkie,
 } from '../data/groups.js';
 import { t } from '../core/i18n.js';
 import { Sheet } from './sheet.js';
@@ -172,7 +172,7 @@ export class WalkieTalkieView {
   #renderTargets(rooms, groups) {
     const previous = this.target.value;
     const dmOptions = rooms.map(room => h('option', { value: `dm:${room.peer}` }, `${t('chats')}: ${room.name || 'MilkyWay'}`));
-    const activeGroups = groups.filter(group => group.join_status === 'active');
+    const activeGroups = groups.filter(group => isActiveGroupMember(group));
     const options = [h('option', { value: '' }, t('chooseConversation'))];
     if (dmOptions.length) options.push(h('optgroup', { label: t('chats') }, ...dmOptions));
     if (activeGroups.length) options.push(h('optgroup', { label: t('groups') },
