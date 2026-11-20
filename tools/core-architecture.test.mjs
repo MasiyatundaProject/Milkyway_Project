@@ -1320,10 +1320,21 @@ test('public Supabase content uses DOM text nodes and validates media URLs', () 
 
 test('registration, privacy policy and account deletion request are wired', () => {
   const auth = readFileSync(new URL('../milkyway/app/ui/auth-sheet.js', import.meta.url), 'utf8');
+  const shell = readFileSync(new URL('../milkyway/index.html', import.meta.url), 'utf8');
+  const authCss = readFileSync(new URL('../milkyway/app/app.css', import.meta.url), 'utf8');
+  const main = readFileSync(new URL('../milkyway/app/main.js', import.meta.url), 'utf8');
   assert.match(auth, /auth\.signUp/);
   assert.match(auth, /emailRedirectTo/);
   assert.match(auth, /passwordMismatch/);
   assert.match(auth, /confirmEmailSent/);
+  assert.match(auth, /auth-field-error/);
+  assert.match(auth, /auth-close/);
+  assert.match(auth, /this\.setMode\(mode === 'signup' \? 'signup' : 'signin'\)/);
+  assert.match(shell, /data-auth-entry="signin"/);
+  assert.match(shell, /data-auth-entry="signup"/);
+  assert.match(main, /sheet\.open\(button\.dataset\.authEntry\)/);
+  assert.match(authCss, /html\[data-signed-in\] \.auth-entry/);
+  assert.match(authCss, /\.auth-entry-signup/);
   const policy = readFileSync(new URL('../privacy.html', import.meta.url), 'utf8');
   const deletion = readFileSync(new URL('../account-deletion.html', import.meta.url), 'utf8');
   assert.match(policy, /account-deletion\.html/);
