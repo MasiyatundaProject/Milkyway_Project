@@ -246,13 +246,13 @@ select public.mw_repair_key('mw_push_subscriptions', array['user_id', 'endpoint'
 select public.mw_repair_add('mw_live_alerts', 'id', 'uuid default gen_random_uuid()', 'uuid default gen_random_uuid()');
 select public.mw_repair_add('mw_live_alerts', 'recipient_id', 'uuid references auth.users(id) on delete cascade', 'uuid');
 select public.mw_repair_add('mw_live_alerts', 'host_id', 'uuid references auth.users(id) on delete cascade', 'uuid');
-select public.mw_repair_add('mw_live_alerts', 'room_name', 'text', 'text');
+select public.mw_repair_add('mw_live_alerts', 'room', 'text', 'text');
 select public.mw_repair_add('mw_live_alerts', 'host_name', 'text', 'text');
 select public.mw_repair_add('mw_live_alerts', 'title', 'text', 'text');
 select public.mw_repair_add('mw_live_alerts', 'created_at', 'timestamptz not null default now()', 'timestamptz not null default now()');
 select public.mw_repair_add('mw_live_alerts', 'read_at', 'timestamptz', 'timestamptz');
 select public.mw_repair_key('mw_live_alerts', array['id']);
-select public.mw_repair_key('mw_live_alerts', array['recipient_id', 'room_name']);
+select public.mw_repair_key('mw_live_alerts', array['recipient_id', 'room']);
 -- mw_post_audience
 select public.mw_repair_add('mw_post_audience', 'post_id', 'uuid references public.mw_posts(id) on delete cascade', 'uuid');
 select public.mw_repair_add('mw_post_audience', 'owner_id', 'uuid references auth.users(id) on delete cascade', 'uuid');
@@ -528,7 +528,7 @@ select public.mw_repair_copy('mw_message_hides', 'hidden_at', 'created_at', true
 select public.mw_repair_copy('mw_dm_group_messages', 'message', 'body');
 select public.mw_repair_copy('mw_live_room_messages', 'message', 'body');
 select public.mw_repair_copy('mw_live_room_messages', 'room_id', 'room_name');
-select public.mw_repair_copy('mw_live_alerts', 'room', 'room_name');
+select public.mw_repair_copy('mw_live_alerts', 'room_name', 'room');
 select public.mw_repair_relax('mw_messages', array['id', 'sender_id', 'receiver_id', 'body', 'created_at']);
 select public.mw_repair_relax('mw_dm_groups', array['id', 'name', 'created_by', 'created_at']);
 select public.mw_repair_relax('mw_dm_group_members', array['group_id', 'user_id', 'role', 'joined_at']);
@@ -548,7 +548,7 @@ select public.mw_repair_relax('mw_live_history_archive', array['user_id', 'sourc
 select public.mw_repair_relax('mw_dm_group_blocks', array['group_id', 'user_id', 'blocked_by', 'created_at']);
 select public.mw_repair_relax('mw_notification_preferences', array['user_id', 'live_enabled', 'sound_enabled', 'language', 'updated_at']);
 select public.mw_repair_relax('mw_push_subscriptions', array['id', 'user_id', 'endpoint', 'p256dh', 'auth', 'created_at']);
-select public.mw_repair_relax('mw_live_alerts', array['id', 'recipient_id', 'host_id', 'room_name', 'host_name', 'title', 'created_at', 'read_at']);
+select public.mw_repair_relax('mw_live_alerts', array['id', 'recipient_id', 'host_id', 'room', 'host_name', 'title', 'created_at', 'read_at']);
 select public.mw_repair_relax('mw_post_audience', array['post_id', 'owner_id', 'audience', 'updated_at']);
 select public.mw_repair_relax('mw_post_extras', array['post_id', 'owner_id', 'location', 'tags', 'media', 'updated_at']);
 select public.mw_repair_relax('mw_comment_extras', array['comment_id', 'post_id', 'owner_id', 'parent_id', 'tags', 'media', 'updated_at']);
@@ -1656,12 +1656,12 @@ create table if not exists public.mw_live_alerts (
   id uuid primary key default gen_random_uuid(),
   recipient_id uuid not null references auth.users(id) on delete cascade,
   host_id uuid not null references auth.users(id) on delete cascade,
-  room_name text not null,
+  room text not null,
   host_name text,
   title text,
   created_at timestamptz not null default now(),
   read_at timestamptz,
-  unique (recipient_id, room_name)
+  unique (recipient_id, room)
 );
 create index if not exists mw_live_alerts_recipient_idx on public.mw_live_alerts (recipient_id, created_at desc);
 
@@ -1713,11 +1713,11 @@ begin
     select coalesce(array_agg(r.recipient_id order by r.recipient_id), '{}') into batch_ids
     from public.mw_live_notification_recipients(me, cursor_id) r;
     exit when coalesce(array_length(batch_ids, 1), 0) = 0;
-    insert into public.mw_live_alerts (recipient_id, host_id, room_name, host_name, title)
+    insert into public.mw_live_alerts (recipient_id, host_id, room, host_name, title)
     select t.id, me, p_room, live.host_name, live.title
     from unnest(batch_ids) as t(id)
     where coalesce((select pref.live_enabled from public.mw_notification_preferences pref where pref.user_id = t.id), true)
-    on conflict (recipient_id, room_name) do nothing;
+    on conflict (recipient_id, room) do nothing;
     get diagnostics added = row_count;
     total := total + added;
     cursor_id := batch_ids[array_length(batch_ids, 1)];
@@ -5828,6 +5828,69 @@ create trigger mw_messages_push
 
 alter table public.mw_messages enable row level security;
 revoke all on public.mw_messages from anon;
+-- ===============================================================================================================
+-- supabase/migrations/20261121_milkyway_live_alert_room.sql
+-- ===============================================================================================================
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'mw_live_alerts' and column_name = 'room_name'
+  ) and not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'mw_live_alerts' and column_name = 'room'
+  ) then
+    alter table public.mw_live_alerts rename column room_name to room;
+  elsif exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'mw_live_alerts' and column_name = 'room_name'
+  ) then
+    update public.mw_live_alerts set room = coalesce(room, room_name) where room is null;
+  end if;
+end;
+$$;
+
+create unique index if not exists mw_live_alerts_recipient_room_idx
+  on public.mw_live_alerts (recipient_id, room);
+
+create or replace function public.mw_live_announce(p_room text)
+returns jsonb
+language plpgsql security definer set search_path = ''
+as $$
+declare
+  me uuid := auth.uid();
+  live record;
+  cursor_id uuid := null;
+  batch_ids uuid[];
+  added integer;
+  total integer := 0;
+begin
+  if me is null then raise exception 'Sign in first.' using errcode = '42501'; end if;
+  select s.host_id, s.host_name, s.title into live
+  from public.mw_video_live_sessions s
+  where s.room_name = p_room and s.host_id = me and s.is_live
+  limit 1;
+  if not found then raise exception 'Not allowed.' using errcode = '42501'; end if;
+  loop
+    select coalesce(array_agg(r.recipient_id order by r.recipient_id), '{}') into batch_ids
+    from public.mw_live_notification_recipients(me, cursor_id) r;
+    exit when coalesce(array_length(batch_ids, 1), 0) = 0;
+    insert into public.mw_live_alerts (recipient_id, host_id, room, host_name, title)
+    select t.id, me, p_room, live.host_name, live.title
+    from unnest(batch_ids) as t(id)
+    where coalesce((select pref.live_enabled from public.mw_notification_preferences pref where pref.user_id = t.id), true)
+    on conflict (recipient_id, room) do nothing;
+    get diagnostics added = row_count;
+    total := total + added;
+    cursor_id := batch_ids[array_length(batch_ids, 1)];
+    exit when array_length(batch_ids, 1) < 500;
+  end loop;
+  return jsonb_build_object('complete', true, 'notified', total);
+end;
+$$;
+
+notify pgrst, 'reload schema';
+
 -- ===============================================================================================================
 -- supabase/migrations/20261215_milkyway_notification_read_state.sql
 -- ===============================================================================================================

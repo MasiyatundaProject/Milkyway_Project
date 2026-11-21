@@ -186,7 +186,7 @@ add(
   "select public.mw_repair_copy('mw_dm_group_messages', 'message', 'body');",
   "select public.mw_repair_copy('mw_live_room_messages', 'message', 'body');",
   "select public.mw_repair_copy('mw_live_room_messages', 'room_id', 'room_name');",
-  "select public.mw_repair_copy('mw_live_alerts', 'room', 'room_name');",
+  "select public.mw_repair_copy('mw_live_alerts', 'room_name', 'room');",
 );
 for (const [table, { columns }] of tables) add(`select public.mw_repair_relax(${quote(table)}, array[${[...columns.keys()].map(quote).join(', ')}]);`);
 add('');

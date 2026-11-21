@@ -22,12 +22,12 @@ create table if not exists public.mw_live_alerts (
   id uuid primary key default gen_random_uuid(),
   recipient_id uuid not null references auth.users(id) on delete cascade,
   host_id uuid not null references auth.users(id) on delete cascade,
-  room_name text not null,
+  room text not null,
   host_name text,
   title text,
   created_at timestamptz not null default now(),
   read_at timestamptz,
-  unique (recipient_id, room_name)
+  unique (recipient_id, room)
 );
 create index if not exists mw_live_alerts_recipient_idx on public.mw_live_alerts (recipient_id, created_at desc);
 
@@ -79,11 +79,11 @@ begin
     select coalesce(array_agg(r.recipient_id order by r.recipient_id), '{}') into batch_ids
     from public.mw_live_notification_recipients(me, cursor_id) r;
     exit when coalesce(array_length(batch_ids, 1), 0) = 0;
-    insert into public.mw_live_alerts (recipient_id, host_id, room_name, host_name, title)
+    insert into public.mw_live_alerts (recipient_id, host_id, room, host_name, title)
     select t.id, me, p_room, live.host_name, live.title
     from unnest(batch_ids) as t(id)
     where coalesce((select pref.live_enabled from public.mw_notification_preferences pref where pref.user_id = t.id), true)
-    on conflict (recipient_id, room_name) do nothing;
+    on conflict (recipient_id, room) do nothing;
     get diagnostics added = row_count;
     total := total + added;
     cursor_id := batch_ids[array_length(batch_ids, 1)];

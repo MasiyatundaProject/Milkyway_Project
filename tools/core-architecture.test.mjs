@@ -30,6 +30,7 @@ test('group management schema and UI implement guarded joins, invitations and co
   const approvalMigration = readFileSync(new URL('../supabase/migrations/20261211_milkyway_group_approved_owner.sql', import.meta.url), 'utf8');
   const moderationMigration = readFileSync(new URL('../supabase/migrations/20261212_milkyway_group_message_moderation.sql', import.meta.url), 'utf8');
   const repair = readFileSync(new URL('../supabase/milkyway-schema-repair.sql', import.meta.url), 'utf8');
+  const liveAlertMigration = readFileSync(new URL('../supabase/migrations/20261105_milkyway_api_notifications.sql', import.meta.url), 'utf8');
   assert.match(migration, /join_mode in \('open', 'request_approval', 'invite_only'\)/);
   assert.match(migration, /add column if not exists avatar_url text not null default ''/);
   assert.match(migration, /add column if not exists join_mode text not null default 'invite_only'/);
@@ -433,6 +434,8 @@ test('notification activity supports legacy LIVE alerts and badges direct and gr
   assert.match(api, /Group read-state table is unavailable/);
   assert.doesNotMatch(api, /mw_live_alerts[^`\n]*select=[^`\n]*\bid\b/i);
   assert.match(api, /mw_live_alerts\?recipient_id=.*?select=room,host_id,host_name,title,created_at,read_at/);
+  assert.match(liveAlertMigration, /mw_live_alerts \(recipient_id, host_id, room, host_name, title\)/);
+  assert.match(repair, /20261121_milkyway_live_alert_room\.sql/);
   assert.match(api, /room=in\.\(\$\{list\}\)/);
   assert.match(api, /mw_post_notifications\?recipient_id=/);
   assert.match(api, /loadUnreadMessages/);
