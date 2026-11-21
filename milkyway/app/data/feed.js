@@ -216,5 +216,5 @@ export const actions = {
     if (path.startsWith(`milkyway/${auth.userId}/`)) sb.storage.from('portfolio').remove([path, `${path}.poster.jpg`]).catch(() => {});
     return true;
   },
-  commentAdded(postId) { updatePost(postId, current => ({ comments: current.comments + 1 })); },
+  commentAdded(postId) { updatePost(postId, current => ({ comments: (current.comments || 0) + 1 })); },
 };

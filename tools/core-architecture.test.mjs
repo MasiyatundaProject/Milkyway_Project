@@ -9,7 +9,7 @@ import callApi from '../api/milkyway-call.js';
 import livekitToken from '../api/milkyway-livekit-token.js';
 import { runApi } from '../api/_lib/fetch-adapter.js';
 import { savedAmong, savedList } from '../api/_lib/saves.js';
-import { accessToken, closeRoom, livekitConfigurationError, livekitConfigured, livekitUrl, livekitUsable, SCREEN_SHARE } from '../api/_lib/livekit.js';
+import { accessToken, closeRoom, livekitConfigurationError, livekitConfigured, livekitUrl, livekitUsable, CALL_TOKEN_TTL_SECONDS } from '../api/_lib/livekit.js';
 import { postShareResponse } from '../api/_lib/post-share.js';
 import { assertRoomAccess } from '../milkyway/app/core/livekit-access.js';
 import { identifyMediaFile, mediaInfo, openFilePicker } from '../milkyway/app/core/media-files.js';
@@ -232,10 +232,14 @@ test('LiveKit reads Cloudflare bindings first and identifies missing credentials
   assert.equal(claims.iss, bindings.LIVEKIT_API_KEY);
   assert.equal(claims.sub, A);
   assert.equal(claims.video.room, `dm-call-${A}-${B}`);
+  assert.equal(claims.video.roomJoin, true);
+  assert.equal(claims.video.canPublish, true);
+  assert.deepEqual(claims.video.canPublishSources, []);
+  assert.ok(claims.iat <= claims.exp && claims.iat >= claims.nbf);
 });
 
 test('Hosted API routes dispatch DM video-call tokens to the configured LiveKit signer', async () => {
-  assert.equal(SCREEN_SHARE, 3);
+  assert.equal(CALL_TOKEN_TTL_SECONDS, 6 * 60 * 60);
   const fetchAdapter = readFileSync(new URL('../api/_lib/fetch-adapter.js', import.meta.url), 'utf8');
   const cloudflareApi = readFileSync(new URL('../functions/api/_middleware.js', import.meta.url), 'utf8');
   const netlifyApi = readFileSync(new URL('../netlify/functions/milkyway-api.mjs', import.meta.url), 'utf8');
@@ -286,7 +290,9 @@ test('Hosted API routes dispatch DM video-call tokens to the configured LiveKit 
     assert.equal(claims.video.canPublish, true);
     assert.equal(claims.video.canSubscribe, true);
     assert.equal(claims.video.canPublishData, true);
-    assert.deepEqual(claims.video.canPublishSources, ['camera', 'microphone', 'screen_share']);
+    assert.deepEqual(claims.video.canPublishSources, ['camera', 'microphone']);
+    assert.equal(claims.exp - claims.iat, CALL_TOKEN_TTL_SECONDS);
+    assert.ok(claims.nbf <= claims.iat);
     assert.equal(response.headers.get('cache-control'), 'no-store');
     assert.deepEqual(JSON.parse(claims.metadata), { avatar: '', callType: 'video', videoEnabled: true });
     const missingResponse = await runApi('milkyway-call', new Request('https://www.masiyatunda.com/api/milkyway-call?action=start', {
@@ -297,6 +303,63 @@ test('Hosted API routes dispatch DM video-call tokens to the configured LiveKit 
     const missing = await missingResponse.json();
     assert.equal(missingResponse.status, 503);
     assert.match(missing.error, /Missing LIVEKIT_API_KEY, LIVEKIT_API_SECRET/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('new DM calls end stale rows but preserve calls with a live LiveKit participant', async () => {
+  const originalFetch = globalThis.fetch;
+  const callId = P(82);
+  const now = Date.now();
+  const staleCall = {
+    id: callId, caller_id: A, callee_id: B, status: 'accepted',
+    offer: { mode: 'audio', callType: 'audio' },
+    answer: { acceptedAt: new Date(now - 60_000).toISOString() },
+    created_at: new Date(now - 65_000).toISOString(),
+  };
+  const runStart = async participants => {
+    const requests = [];
+    globalThis.fetch = async (input, init = {}) => {
+      const url = String(input), method = init.method || 'GET';
+      requests.push({ url, method, body: init.body ? JSON.parse(init.body) : null });
+      if (url.endsWith('/auth/v1/user')) return new Response(JSON.stringify({ id: A }), { status: 200 });
+      if (url.includes('/rest/v1/mw_dm_calls?select=')) return new Response(JSON.stringify([staleCall]), { status: 200 });
+      if (url.includes('/twirp/livekit.RoomService/ListParticipants')) return new Response(JSON.stringify({ participants }), { status: 200 });
+      if (url.includes('/rest/v1/mw_dm_calls?id=eq.') && method === 'PATCH') {
+        return new Response(JSON.stringify([{ ...staleCall, ...requests.at(-1).body }]), { status: 200 });
+      }
+      if (url.includes('/rest/v1/rpc/mw_room_cleanup_enqueue')) return new Response('[]', { status: 200 });
+      if (url.includes('/rest/v1/mw_dm_calls?caller_id=')) return new Response('[]', { status: 200 });
+      if (url.endsWith('/rest/v1/mw_dm_calls') && method === 'POST') {
+        return new Response(JSON.stringify([{ id: P(83), caller_id: A, callee_id: B, status: 'ringing', created_at: new Date().toISOString() }]), { status: 200 });
+      }
+      if (url.includes('/realtime/v1/api/broadcast')) return new Response('{}', { status: 200 });
+      throw new Error(`Unexpected call-start request: ${method} ${url}`);
+    };
+    const response = await runApi('milkyway-call', new Request('https://www.masiyatunda.com/api/milkyway-call?action=start', {
+      method: 'POST',
+      headers: { authorization: 'Bearer test-user-token', apikey: 'test-public-key', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ callee: B, mode: 'audio' }),
+    }), {
+      LIVEKIT_URL: 'wss://binding-live.example.test',
+      LIVEKIT_API_KEY: 'binding-key',
+      LIVEKIT_API_SECRET: 'binding-secret',
+    });
+    return { response, requests };
+  };
+  try {
+    const stale = await runStart([]);
+    assert.equal(stale.response.status, 200);
+    const ended = stale.requests.find(request => request.method === 'PATCH' && request.url.includes('mw_dm_calls?id=eq.'));
+    assert.equal(ended?.body.status, 'ended');
+    assert.equal(ended?.body.answer.outcome, 'disconnected');
+    assert.ok(stale.requests.some(request => request.url.includes('/twirp/livekit.RoomService/ListParticipants')));
+    assert.ok(stale.requests.some(request => request.url.includes('/rpc/mw_room_cleanup_enqueue')));
+
+    const active = await runStart([{ identity: A }]);
+    assert.equal(active.response.status, 409);
+    assert.ok(!active.requests.some(request => request.method === 'PATCH' && request.url.includes('mw_dm_calls?id=eq.')));
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -398,7 +461,7 @@ test('creator service reads prefer user_id/price and fall back only for the lega
   assert.equal(services[0].price, 'from 20');
 });
 
-test('opened post viewer refreshes and updates all four visible metrics', () => {
+test('opened post viewer refreshes persisted counts and watches all four visible metrics', () => {
   const viewer = readFileSync(new URL('../milkyway/app/ui/post-viewer.js', import.meta.url), 'utf8');
   const main = readFileSync(new URL('../milkyway/app/main.js', import.meta.url), 'utf8');
   const settings = readFileSync(new URL('../milkyway/app/ui/settings-view.js', import.meta.url), 'utf8');
@@ -409,10 +472,17 @@ test('opened post viewer refreshes and updates all four visible metrics', () => 
   assert.match(viewer, /eq\('kind', 'light'\)/);
   assert.match(viewer, /eq\('kind', 'share'\)/);
   assert.match(viewer, /mw_reposts/);
-  assert.match(viewer, /post\.likes = likes\.count/);
-  assert.match(viewer, /post\.comments = comments\.count/);
-  assert.match(viewer, /post\.shares = shares\.count/);
-  assert.match(viewer, /post\.reposts = reposts\.count/);
+  assert.match(viewer, /post\.likes = likes\.count \?\? 0/);
+  assert.match(viewer, /post\.comments = comments\.count \?\? 0/);
+  assert.match(viewer, /post\.shares = shares\.count \?\? 0/);
+  assert.match(viewer, /post\.reposts = reposts\.count \?\? 0/);
+  assert.doesNotMatch(viewer, /post\._counted/);
+  assert.match(viewer, /#watchMetrics\(post\)/);
+  assert.match(viewer, /table: 'mw_signals'/);
+  assert.match(viewer, /table: 'mw_echoes'/);
+  assert.match(viewer, /table: 'mw_reposts'/);
+  assert.match(viewer, /setInterval\(\(\) => this\.#refreshMetricsSoon\(post\), 30_000\)/);
+  assert.match(viewer, /this\.#loadCounts\(post\)\.then\(\(\) => this\.#watchMetrics\(post\)\)/);
   assert.doesNotMatch(main, /_counted:\s*true/);
   assert.match(settings, /posts = ids\.map\(id => byId\.get\(id\) \|\|/);
 });
@@ -1277,6 +1347,31 @@ test('LIVE settings schema and follower post notifications have an idempotent Re
   assert.match(entry, /import\('\.\/data\/post-notifications\.js'\)/);
 });
 
+test('DM messages trigger private push alerts and the MilkyWay notification control routes to the conversation', () => {
+  const migration = readFileSync(new URL('../supabase/migrations/20261214_milkyway_dm_message_push.sql', import.meta.url), 'utf8');
+  const repair = readFileSync(new URL('../supabase/milkyway-schema-repair.sql', import.meta.url), 'utf8');
+  const fcm = readFileSync(new URL('../api/fcm.js', import.meta.url), 'utf8');
+  const worker = readFileSync(new URL('../milkyway/sw.js', import.meta.url), 'utf8');
+  const entry = readFileSync(new URL('../milkyway/app/main.js', import.meta.url), 'utf8');
+  const shell = readFileSync(new URL('../milkyway/index.html', import.meta.url), 'utf8');
+  const inbox = readFileSync(new URL('../milkyway/app/data/messages.js', import.meta.url), 'utf8');
+  assert.match(migration, /tg_table_name = 'mw_messages'[\s\S]*'type', 'message'[\s\S]*'sender_id', new\.sender_id[\s\S]*'receiver_id', new\.receiver_id/i);
+  assert.match(migration, /create trigger mw_messages_push\s+after insert on public\.mw_messages/i);
+  assert.match(repair, /supabase\/migrations\/20261214_milkyway_dm_message_push\.sql/);
+  assert.match(repair, /create trigger mw_messages_push\s+after insert on public\.mw_messages/i);
+  assert.match(fcm, /type === 'message'[\s\S]*const url = `\/milkyway\/\?dm=\$\{encodeURIComponent\(record\.sender_id\)\}`/);
+  assert.match(fcm, /body: 'Sent you a message\.'/);
+  assert.doesNotMatch(fcm, /notification = \{[^}]*body: String\(record\.body/);
+  assert.match(worker, /data\.message[\s\S]*silent: false[\s\S]*renotify: true/);
+  assert.match(worker, /address\.searchParams\.get\('dm'\) === data\.message\.senderId/);
+  assert.match(entry, /#notificationsButton/);
+  assert.match(entry, /openDirectMessageFromUrl/);
+  assert.match(entry, /isForegroundConversation\(message\.sender_id\)/);
+  assert.match(shell, /id="notificationsButton"/);
+  assert.match(inbox, /function isForegroundConversation/);
+  assert.match(inbox, /function setForegroundConversation/);
+});
+
 test('LIVE room table privileges are granted to authenticated users and limited to active rooms by RLS', () => {
   const migration = readFileSync(new URL('../supabase/migrations/20261125_milkyway_live_room_rls.sql', import.meta.url), 'utf8');
   const requestMigration = readFileSync(new URL('../supabase/migrations/20261130_milkyway_live_member_request_rls.sql', import.meta.url), 'utf8');
@@ -1549,12 +1644,16 @@ test('LIVE token keeps viewers subscribed until the server records host approval
 
 test('service worker precaches every core module', () => {
   const sw = readFileSync(new URL('../milkyway/sw.js', import.meta.url), 'utf8');
+  const sharedCache = readFileSync(new URL('../sw-cache.js', import.meta.url), 'utf8');
   for (const folder of ['core', 'data', 'ui']) {
     for (const file of readdirSync(new URL(`../milkyway/app/${folder}/`, import.meta.url))) {
       assert.ok(sw.includes(`./app/${folder}/${file}`), `${folder}/${file} is precached`);
     }
   }
   assert.ok(sw.includes('./app/core/update-check.js'));
+  assert.match(sharedCache, /request\.method !== 'GET' \|\| request\.headers\.has\('Authorization'\)/);
+  assert.match(sharedCache, /address\.pathname\.startsWith\('\/api\/'\)\) return/);
+  assert.match(sw, /if\(request\.method!=='GET'\)return/);
   assert.doesNotMatch(sw, /VIDEO_STORAGE/, 'video fetch handler uses the current storage URL matcher');
 });
 

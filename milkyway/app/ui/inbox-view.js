@@ -5,7 +5,7 @@ import { auth } from '../core/net.js';
 import { inbox } from '../data/chats.js';
 import { profiles } from '../data/profiles.js';
 import { presence } from '../data/presence.js';
-import { loadThread, sendMessage, sendOneViewText, sendDirectMedia, markRead, onMessage, deleteForMe, searchPeople } from '../data/messages.js';
+import { loadThread, sendMessage, sendOneViewText, sendDirectMedia, markRead, onMessage, deleteForMe, searchPeople, setForegroundConversation } from '../data/messages.js';
 import { consumeViewOnce } from '../data/chat-media.js';
 import { deleteGroup, discoverGroups, isActiveGroupMember, joinGroup, loadGroups } from '../data/groups.js';
 import { Sheet } from './sheet.js';
@@ -233,7 +233,7 @@ export class InboxView {
 
 class ChatSheet {
   constructor() {
-    this.sheet = new Sheet({ title: '', className: 'chat-sheet', onClose: () => { this.peer = null; this.composer.cancelRecording(); this.watchParty.leave(); this.#clearRevealed(); } });
+    this.sheet = new Sheet({ title: '', className: 'chat-sheet', onClose: () => { setForegroundConversation(null); this.peer = null; this.composer.cancelRecording(); this.watchParty.leave(); this.#clearRevealed(); } });
     this.sheet.heading.hidden = true;
     this.name = h('b', {});
     this.state = h('small', { class: 'muted' });
@@ -266,6 +266,7 @@ class ChatSheet {
     this.watchParty.join('dm', person.id).catch(error => toast(error?.message || t('watchConnectFailed')));
     this.#clearRevealed();
     this.peer = { ...person, ...(profiles.peek(person.id) || {}), ...person };
+    setForegroundConversation(this.peer.id);
     this.name.textContent = this.peer.name || 'MilkyWay';
     this.face.replaceChildren(presenceAvatar(this.peer, 38));
     this.#paintState();

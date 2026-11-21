@@ -33,6 +33,10 @@ const giftTray = lazy(() => import('./ui/gift-tray.js').then(m => new m.GiftTray
   onTopUp: () => novaMenu().then(menu => menu.openWallet()),
 })));
 const inboxView = lazy(() => import('./ui/inbox-view.js').then(m => new m.InboxView()));
+const notificationsView = lazy(() => import('./ui/notifications-view.js').then(m => new m.NotificationsView({
+  onOpenLive: room => showLive(room),
+  onOpenMessage: peerId => openDirectMessage(peerId),
+})));
 const walkieTalkieView = lazy(() => import('./ui/walkie-talkie.js').then(m => new m.WalkieTalkieView()));
 const callView = lazy(() => import('./ui/call-view.js').then(m => m.calls));
 const novaMenu = lazy(() => import('./ui/settings-view.js').then(m => new m.NovaMenu({
@@ -159,8 +163,31 @@ function route() {
   const hash = decodeURIComponent(location.hash.slice(1));
   if (hash.startsWith('live')) showLive(hash.split('=')[1] || null);
   else if (shell.dataset.view === 'live') showHome();
+  openDirectMessageFromUrl(new URL(location.href));
 }
 addEventListener('popstate', route);
+
+function openDirectMessageFromUrl(address) {
+  const peerId = address.searchParams.get('dm');
+  if (!peerId || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(peerId)) return;
+  if (!requireLogin()) return;
+  if (address.href === location.href) {
+    address.searchParams.delete('dm');
+    history.replaceState(null, '', address.pathname + (address.search ? address.search : '') + address.hash);
+  }
+  openDirectMessage(peerId);
+}
+
+function openDirectMessage(peerId) {
+  if (!requireLogin() || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(peerId)) return;
+  profiles.many([peerId]).then(people => {
+    const person = people.get(peerId) || { id: peerId, name: 'MilkyWay' };
+    return inboxView().then(view => view.openWith(person));
+  }).catch(error => {
+    console.warn('[notifications] Could not open the linked conversation.', error);
+    toast(error?.message || t('retry'));
+  });
+}
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('message', ({ data }) => {
@@ -172,6 +199,10 @@ if ('serviceWorker' in navigator) {
       const postId = address.searchParams.get('post');
       if (postId) {
         fetchSharedPost(postId).then(openPost).catch(error => toast(error?.message || t('imageUnavailable')));
+        return;
+      }
+      if (address.searchParams.has('dm')) {
+        openDirectMessageFromUrl(address);
         return;
       }
       if (comingSoon(address.hash)) soon();
@@ -189,7 +220,7 @@ if ('serviceWorker' in navigator) {
 }
 
 document.addEventListener('click', event => {
-  const target = event.target.closest('[data-scope], [data-nav], #liveEntry, #walkieEntry, #muteToggle, #profileSearch');
+  const target = event.target.closest('[data-scope], [data-nav], #liveEntry, #walkieEntry, #muteToggle, #profileSearch, #notificationsButton');
   if (!target) return;
   if (target.dataset.scope) { if (shell.dataset.view !== 'home') showHome(); setScope(target.dataset.scope); return; }
   if (target.id === 'liveEntry') { showLive(); return; }
@@ -202,6 +233,13 @@ document.addEventListener('click', event => {
   }
   if (target.id === 'muteToggle') { playback.setMuted(!playback.muted); return; }
   if (target.id === 'profileSearch') { profileSearch().then(view => view.open()); return; }
+  if (target.id === 'notificationsButton') {
+    if (requireLogin()) notificationsView().then(view => view.open()).catch(error => {
+      console.error('[notifications] view could not be opened', error);
+      toast(error?.message || t('notificationSetupFailed'));
+    });
+    return;
+  }
   const nav = target.dataset.nav;
   if (nav === 'home') { if (shell.dataset.view === 'home') feedView.reload(); else showHome(); }
   else if (nav === 'explore') showExplore();
@@ -261,6 +299,7 @@ bus.on('auth', () => {
   if (auth.signedIn()) {
     syncPendingOAuthUsername();
     startSignedIn();
+    openDirectMessageFromUrl(new URL(location.href));
   }
 });
 shell.toggleAttribute('data-signed-in', auth.signedIn());
@@ -271,6 +310,8 @@ shell.toggleAttribute('data-muted', playback.muted);
 document.querySelectorAll('[data-i18n]').forEach(node => { node.textContent = t(node.dataset.i18n); });
 $('profileSearch').setAttribute('aria-label', t('searchPeople'));
 $('profileSearch').title = t('searchPeople');
+$('notificationsButton').setAttribute('aria-label', t('notifications'));
+$('notificationsButton').title = t('notifications');
 setScope(scope);
 route();
 const sharedPostId = new URLSearchParams(location.search).get('post');
@@ -285,6 +326,27 @@ function startSignedIn() {
   import('./data/post-notifications.js').then(({ watchPostNotifications }) => watchPostNotifications())
     .catch(error => console.warn('[notifications] post realtime unavailable', error));
   import('./data/presence.js').then(({ presence }) => presence.start());
+  notificationsView().then(view => {
+    view.onUnread = count => {
+      const badge = $('notificationUnread');
+      if (!badge) return;
+      badge.hidden = count < 1;
+      badge.classList.toggle('has-count', count > 0);
+      badge.textContent = count > 99 ? '99+' : count > 0 ? String(count) : '';
+      $('notificationsButton')?.setAttribute('aria-label', `${t('notifications')}${count ? `, ${count} ${t('unread')}` : ''}`);
+    };
+    view.preload();
+  }).catch(error => console.warn('[notifications] unread state could not be loaded', error));
+  import('./data/messages.js').then(({ onMessage, isForegroundConversation }) => {
+    onMessage(({ type, message }) => {
+      if (type !== 'INSERT' || message?.receiver_id !== auth.userId || message.sender_id === auth.userId
+        || isForegroundConversation(message.sender_id) || document.visibilityState !== 'visible') return;
+      const sender = profiles.peek(message.sender_id)?.name || 'MilkyWay';
+      toast(`${sender} ${t('sentYouMessage')}`);
+      import('./core/notification-sound.js').then(({ playMessageAlert }) => playMessageAlert())
+        .catch(error => console.warn('[notifications] message sound could not be played', error));
+    });
+  }).catch(error => console.warn('[notifications] DM realtime listener could not be started', error));
 }
 
 idle(() => {

@@ -10,6 +10,7 @@ import { h, icon, count, ago, toast, brandMark, mediaPlaceholder } from './dom.j
 import { openShare } from './share-sheet.js';
 
 const SWIPE_PX = 60;
+const metricText = value => value == null || value === '' || !Number.isFinite(Number(value)) ? '…' : count(Number(value));
 
 /** 'video' | 'image' | 'text' for a mw_posts row or a feed post. */
 export const postKind = mediaKind;
@@ -33,7 +34,7 @@ export class PostViewer {
     this.caption = h('p', { class: 'pv-caption' });
     this.when = h('small', { class: 'muted' });
     this.sound = h('div', { class: 'pv-sound' });
-    const metric = (label, value = '0') => h('span', { class: 'pv-metric' }, h('small', {}, label), h('b', {}, value));
+    const metric = label => h('span', { class: 'pv-metric' }, h('small', {}, label), h('b', {}, '…'));
     this.likeBtn = h('button', { class: 'pv-act', type: 'button', 'aria-label': t('postLikes') }, h('span', { html: icon.heart }), metric(t('postLikes')));
     this.commentBtn = h('button', { class: 'pv-act', type: 'button', 'aria-label': t('postComments') }, h('span', { html: icon.comment }), metric(t('postComments')));
     this.shareBtn = h('button', { class: 'pv-act', type: 'button', 'aria-label': t('postShares') }, h('span', { html: icon.share }), metric(t('postShares')));
@@ -53,9 +54,12 @@ export class PostViewer {
     this.nextBtn.onclick = () => this.step(1);
     this.likeBtn.onclick = () => this.#like();
     this.commentBtn.onclick = () => {
-      if (this.post) this.hooks.openComments?.(this.post, () => {
-        this.post.comments = (this.post.comments || 0) + 1;
-        this.#paintCounts();
+      const post = this.post;
+      if (post) this.hooks.openComments?.(post, result => {
+        post.comments = (post.comments || 0) + 1;
+        post._metricsRevision = (post._metricsRevision || 0) + 1;
+        if (this.post === post) this.#paintCounts();
+        if (result !== 'queued') void this.#loadCounts(post);
       });
     };
     this.shareBtn.onclick = () => this.#share();
@@ -178,6 +182,7 @@ export class PostViewer {
 
   close() {
     if (this.root.hidden) return;
+    this.#stopMetricsWatch();
     this.#stopVideo();
     this.#stopSlideshow();
     this.#clearImagePreloads();
@@ -205,6 +210,7 @@ export class PostViewer {
   }
 
   #show(index) {
+    this.#stopMetricsWatch();
     this.#stopVideo();
     this.#stopSlideshow();
     this.#clearImagePreloads();
@@ -249,7 +255,7 @@ export class PostViewer {
     this.repostBtn.disabled = !!auth.userId && authorId === auth.userId;
     this.#resetDelete();
     this.#paintCounts();
-    this.#loadCounts(post);
+    this.#loadCounts(post).then(() => this.#watchMetrics(post));
   }
 
   #stopVideo() {
@@ -408,20 +414,23 @@ export class PostViewer {
     const post = this.post;
     this.likeBtn.classList.toggle('on', !!post.liked);
     this.likeBtn.setAttribute('aria-pressed', String(!!post.liked));
-    this.likeBtn.querySelector('b').textContent = count(post.likes || 0);
-    this.commentBtn.querySelector('b').textContent = count(post.comments || 0);
-    this.shareBtn.querySelector('b').textContent = count(post.shares || 0);
-    this.repostBtn.querySelector('b').textContent = count(post.reposts || 0);
-    this.likeBtn.setAttribute('aria-label', `${t('postLikes')}: ${count(post.likes || 0)}`);
-    this.commentBtn.setAttribute('aria-label', `${t('postComments')}: ${count(post.comments || 0)}`);
-    this.shareBtn.setAttribute('aria-label', `${t('postShares')}: ${count(post.shares || 0)}`);
-    this.repostBtn.setAttribute('aria-label', `${t('postReposts')}: ${count(post.reposts || 0)}`);
+    const likes = metricText(post.likes), comments = metricText(post.comments);
+    const shares = metricText(post.shares), reposts = metricText(post.reposts);
+    this.likeBtn.querySelector('b').textContent = likes;
+    this.commentBtn.querySelector('b').textContent = comments;
+    this.shareBtn.querySelector('b').textContent = shares;
+    this.repostBtn.querySelector('b').textContent = reposts;
+    this.likeBtn.setAttribute('aria-label', `${t('postLikes')}: ${likes}`);
+    this.commentBtn.setAttribute('aria-label', `${t('postComments')}: ${comments}`);
+    this.shareBtn.setAttribute('aria-label', `${t('postShares')}: ${shares}`);
+    this.repostBtn.setAttribute('aria-label', `${t('postReposts')}: ${reposts}`);
     this.repostBtn.classList.toggle('on', !!post.reposted);
     this.repostBtn.setAttribute('aria-pressed', String(!!post.reposted));
   }
 
   async #loadCounts(post) {
-    if (post._counted) return;
+    const requestId = post._metricsRequestId = (post._metricsRequestId || 0) + 1;
+    const revision = post._metricsRevision || 0;
     try {
       const sb = await supabase();
       const head = { count: 'exact', head: true };
@@ -441,19 +450,62 @@ export class PostViewer {
         auth.userId ? sb.from('mw_reposts').select('post_id').eq('original_post_id', originalId).eq('user_id', auth.userId).limit(1) : Promise.resolve({ data: [] }),
       ]);
       for (const result of [reposts, mineRepost]) if (result.error) throw result.error;
-      post.likes = likes.count || 0;
-      post.comments = comments.count || 0;
+      if (post._metricsRequestId !== requestId || (post._metricsRevision || 0) !== revision) return;
+      post.likes = likes.count ?? 0;
+      post.comments = comments.count ?? 0;
       post.liked = !!mine.data?.length;
-      post.shares = shares.count || 0;
+      post.shares = shares.count ?? 0;
       post.shared = !!mineShare.data?.length;
-      post.reposts = reposts.count || 0;
+      post.reposts = reposts.count ?? 0;
       post.reposted = !!mineRepost.data?.length;
       post.originalPostId = originalId;
-      post._counted = true;
       if (this.post === post) this.#paintCounts();
     } catch (error) {
       console.warn('[post-viewer] Could not load post metrics', error);
     }
+  }
+
+  async #watchMetrics(post) {
+    if (this.root.hidden || this.post !== post) return;
+    this.metricsPoll = setInterval(() => this.#refreshMetricsSoon(post), 30_000);
+    try {
+      const sb = await supabase();
+      if (this.root.hidden || this.post !== post) return;
+      const refresh = () => this.#refreshMetricsSoon(post);
+      this.metricsChannel = sb.channel(`post-metrics:${post.id}:${Date.now()}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'mw_signals', filter: `post_id=eq.${post.id}` }, refresh)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'mw_echoes', filter: `post_id=eq.${post.id}` }, refresh)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'mw_reposts', filter: `original_post_id=eq.${post.originalPostId || post.id}` }, refresh)
+        .subscribe(status => {
+          if (['CHANNEL_ERROR', 'TIMED_OUT'].includes(status)) {
+            console.warn('[post-viewer] Post metrics realtime unavailable; polling remains enabled.');
+          }
+        });
+      this.metricsClient = sb;
+    } catch (error) {
+      console.warn('[post-viewer] Could not watch live post metrics; polling remains enabled.', error);
+    }
+  }
+
+  #refreshMetricsSoon(post) {
+    clearTimeout(this.metricsRefreshTimer);
+    this.metricsRefreshTimer = setTimeout(() => {
+      if (!this.root.hidden && this.post === post) void this.#loadCounts(post);
+    }, 250);
+  }
+
+  #stopMetricsWatch() {
+    clearInterval(this.metricsPoll);
+    clearTimeout(this.metricsRefreshTimer);
+    this.metricsPoll = null;
+    this.metricsRefreshTimer = null;
+    const channel = this.metricsChannel;
+    const client = this.metricsClient;
+    this.metricsChannel = null;
+    this.metricsClient = null;
+    if (channel && client) client.removeChannel(channel).catch(error => {
+      console.warn('[post-viewer] Could not stop post metrics realtime channel.', error);
+    });
   }
 
   #feedShape() {
@@ -468,9 +520,13 @@ export class PostViewer {
     const previous = { liked: post.liked, likes: post.likes || 0 };
     post.liked = on;
     post.likes = Math.max(0, (post.likes || 0) + (on ? 1 : -1));
+    post._metricsRevision = (post._metricsRevision || 0) + 1;
     this.#paintCounts();
-    actions.like(this.#feedShape(), on).catch(error => {
+    actions.like(this.#feedShape(), on).then(result => {
+      if (result === 'sent') void this.#loadCounts(post);
+    }).catch(error => {
       Object.assign(post, previous);
+      post._metricsRevision = (post._metricsRevision || 0) + 1;
       if (this.post === post) this.#paintCounts();
       toast(error?.message || t('retry'));
     });
@@ -481,10 +537,14 @@ export class PostViewer {
     if (auth.userId && !post.shared) {
       post.shared = true;
       post.shares = (post.shares || 0) + 1;
+      post._metricsRevision = (post._metricsRevision || 0) + 1;
       this.#paintCounts();
-      actions.share(post).catch(error => {
+      actions.share(post).then(result => {
+        if (result === 'sent') void this.#loadCounts(post);
+      }).catch(error => {
         post.shared = false;
         post.shares = Math.max(0, post.shares - 1);
+        post._metricsRevision = (post._metricsRevision || 0) + 1;
         if (this.post === post) this.#paintCounts();
         toast(error?.message || t('retry'));
       });
@@ -503,9 +563,12 @@ export class PostViewer {
       await api(`${config.api.base}/milkyway-social?action=repost&id=${encodeURIComponent(post.originalPostId || post.id)}`, { method: 'POST', timeout: 12000 });
       post.reposted = true;
       post.reposts = (post.reposts || 0) + 1;
+      post._metricsRevision = (post._metricsRevision || 0) + 1;
       if (this.post === post) this.#paintCounts();
+      void this.#loadCounts(post);
       toast(t('reposted'));
     } catch (error) {
+      void this.#loadCounts(post);
       toast(error?.message || t('retry'));
     } finally {
       if (this.post === post) {

@@ -10,6 +10,15 @@ import { removeChatMedia, sendViewOnce, uploadChatMedia } from './chat-media.js'
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const listeners = new Set();
 let channel = null;
+let foregroundPeer = null;
+
+export function setForegroundConversation(peer) {
+  foregroundPeer = peer ? String(peer) : null;
+}
+
+export function isForegroundConversation(peer) {
+  return document.visibilityState === 'visible' && foregroundPeer === String(peer);
+}
 
 /** Newest last. */
 export async function loadThread(peer) {

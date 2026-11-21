@@ -23,6 +23,7 @@ export function livekitConfigurationError(environment) {
 
 export const CAMERA = 1, MIC = 2, SCREEN_SHARE = 3;
 const SOURCE_NAMES = { [CAMERA]: 'camera', [MIC]: 'microphone', [SCREEN_SHARE]: 'screen_share' };
+export const CALL_TOKEN_TTL_SECONDS = 6 * 60 * 60;
 
 export const livekitConfigured = environment => livekitMissingVariables(environment).length === 0;
 // Clients connect over WebSocket; an https:// project URL (as copied from the LiveKit dashboard) means the same host.
@@ -163,7 +164,7 @@ export function accessToken({ identity, name = '', metadata = '', room, canPubli
   const now = Math.floor(Date.now() / 1000);
   return sign({
     iss: env('LIVEKIT_API_KEY', environment), sub: identity, name: String(name || 'MilkyWay user').slice(0, 80), metadata, jti: randomUUID(),
-    nbf: now - 5, exp: now + ttlSeconds,
+    iat: now, nbf: now - 5, exp: now + ttlSeconds,
     video: {
       room, roomJoin: true, canSubscribe: true, canPublishData: true, canPublish,
       canPublishSources: canPublish ? sources.map(source => SOURCE_NAMES[source]).filter(Boolean) : [],

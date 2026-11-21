@@ -296,6 +296,15 @@ async function event(req, res) {
       call: { id: record.id, kind: 'ring', callType: mode, videoEnabled: mode === 'video', answer: 'Answer', decline: 'Decline' },
     };
     ttl = 60;
+  } else if (type === 'message' && UUID.test(record.sender_id || '') && UUID.test(record.receiver_id || '')
+    && record.sender_id !== record.receiver_id) {
+    recipientId = record.receiver_id;
+    const sender = await profileName(record.sender_id);
+    notification = { title: sender, body: 'Sent you a message.' };
+    const url = `/milkyway/?dm=${encodeURIComponent(record.sender_id)}`;
+    data = { url, kind: 'message', senderId: record.sender_id };
+    web = { title: notification.title, body: notification.body, url, tag: `dm:${record.sender_id}`, message: { senderId: record.sender_id } };
+    ttl = 86400;
   } else {
     return sendJson(res, 400, { error: 'Unsupported push event.' });
   }

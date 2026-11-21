@@ -469,7 +469,19 @@ export const calls = {
       const result = await callApi('start', { callee: peer, mode: callType, callType, videoEnabled, name: auth.name });
       if (!result?.call) throw new Error(t('callFailed'));
       calls.active = new CallScreen({ call: result.call, peer, callType: result.callType || callType, incoming: false });
-    } catch (error) { toast(error?.message || t('callFailed')); }
+    } catch (error) {
+      if (error?.status === 409 && window.confirm(t('callAlreadyActiveReset'))) {
+        try {
+          await callApi('reset', { peer });
+          await calls.start(peer, mode);
+          return;
+        } catch (resetError) {
+          toast(resetError?.message || t('callResetFailed'));
+          return;
+        }
+      }
+      toast(error?.message || t('callFailed'));
+    }
   },
 
   /** Opens a ringing call addressed to me (from a notification link, the Realtime nudge or polling). */

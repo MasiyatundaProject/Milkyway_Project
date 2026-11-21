@@ -39,7 +39,7 @@ svg { width: 1em; height: 1em; fill: currentColor; display: block; }
 /* ---- Top bar & bottom nav --------------------------------------------------------------------------------- */
 .topbar {
   position: fixed; z-index: 20; inset: 0 0 auto; height: var(--top-h); padding: env(safe-area-inset-top) 12px 0;
-  display: grid; grid-template-columns: 64px minmax(0, 1fr) 62px 40px 40px; align-items: center;
+  display: grid; grid-template-columns: 64px minmax(0, 1fr) 62px 40px 40px 40px; align-items: center;
   background: linear-gradient(rgba(5,6,26,.6), transparent); pointer-events: none;
 }
 .topbar > * { pointer-events: auto; }
@@ -59,6 +59,11 @@ html[data-view="explore"] .topbar { display: none; }
 .walkie-entry.hide-label .walkie-label { display: none; }
 .mute-toggle { justify-self: end; grid-column: 4; }
 .profile-search { justify-self: end; grid-column: 5; }
+.notifications-button { justify-self: end; grid-column: 6; position: relative; }
+.notifications-button svg { width: 22px; height: 22px; filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }
+.notification-unread { position: absolute; top: 2px; right: 1px; min-width: 9px; height: 9px; border: 1.5px solid #090b28; border-radius: 99px; background: #ff526d; }
+.notification-unread.has-count { top: -3px; right: -5px; min-width: 17px; height: 17px; padding: 0 4px; display: grid; place-items: center; color: white; font-size: 10px; font-weight: 800; line-height: 1; }
+.notification-unread[hidden] { display: none; }
 .mute-toggle svg { font-size: 22px; filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }
 html[data-muted] .mute-toggle .i-sound, html:not([data-muted]) .mute-toggle .i-muted { display: none; }
 .bottombar {

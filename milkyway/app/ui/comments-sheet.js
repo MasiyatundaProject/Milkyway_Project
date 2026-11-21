@@ -46,7 +46,7 @@ export class CommentsSheet {
     try {
       const result = await addComment(this.post.id, body);
       actions.commentAdded(this.post.id);
-      this.onCommentAdded?.();
+      this.onCommentAdded?.(result);
       if (result === 'queued') toast(t('queued'));
     } catch (error) { toast(error.message); }
   }

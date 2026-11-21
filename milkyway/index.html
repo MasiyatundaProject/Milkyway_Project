@@ -14,7 +14,7 @@
 <!-- Connections are opened early; nothing here blocks rendering. -->
 <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
 <link rel="stylesheet" href="splash.css?v=1"><link rel="preload" as="image" href="brand/milkyway-splash.webp" fetchpriority="high"><script type="module">try{if(sessionStorage.getItem("mw_splash_seen"))document.documentElement.setAttribute("data-splash-seen","")}catch(e){}</script>
-<link rel="stylesheet" href="app/app.css?v=30">
+<link rel="stylesheet" href="app/app.css?v=31">
 <link rel="modulepreload" href="app/main.js">
 <link rel="modulepreload" href="app/config.js">
 <link rel="modulepreload" href="app/core/store.js">
@@ -48,6 +48,10 @@
   </button>
   <button id="profileSearch" class="icon-btn profile-search" type="button" aria-label="Search people">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.5 3a7.5 7.5 0 0 1 6 12l4.7 4.6-1.5 1.5-4.6-4.7A7.5 7.5 0 1 1 10.5 3zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11z"/></svg>
+  </button>
+  <button id="notificationsButton" class="icon-btn notifications-button" type="button" aria-label="Notifications" title="Notifications">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span id="notificationUnread" class="notification-unread" hidden aria-hidden="true"></span>
   </button>
 </header>
 
