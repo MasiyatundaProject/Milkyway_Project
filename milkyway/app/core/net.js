@@ -119,7 +119,7 @@ export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 
-async function send(url, { method = 'GET', body, headers = {}, timeout = 10000, authed = true, signal } = {}, retried = false) {
+async function send(url, { method = 'GET', body, headers = {}, timeout = 10000, authed = true, signal, cache } = {}, retried = false) {
   const token = authed ? await accessToken() : null;
   const init = {
     method,
@@ -127,6 +127,7 @@ async function send(url, { method = 'GET', body, headers = {}, timeout = 10000, 
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout),
   };
+  if (cache) init.cache = cache;
   if (token) init.headers.Authorization = `Bearer ${token}`;
   let response;
   try { response = await fetch(url, init); }
@@ -141,7 +142,7 @@ async function send(url, { method = 'GET', body, headers = {}, timeout = 10000, 
   setOnline(true);
   if (response.status === 401 && token && !retried) {
     await accessToken({ force: true });
-    return send(url, { method, body, headers, timeout, authed, signal }, true);
+    return send(url, { method, body, headers, timeout, authed, signal, cache }, true);
   }
   const type = response.headers.get('content-type') || '';
   const data = /json/.test(type) ? await response.json().catch(() => null) : null;

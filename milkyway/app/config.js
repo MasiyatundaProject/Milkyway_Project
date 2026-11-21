@@ -31,12 +31,19 @@ const defaults = {
     // Leave empty: the token endpoint returns the server URL. Set it to pre-warm the connection earlier.
     url: '',
     tokenEndpoint: '/api/milkyway-livekit-token',
-    // Used when the site API is unreachable (e.g. a static mirror).
+    // Used by LIVE sessions when the site API is unreachable (e.g. a static mirror).
     directTokenEndpoint: `${(envSupabaseUrl || 'https://wpclkhgizbvxuvbhbwzs.supabase.co').replace(/\/+$/, '')}/functions/v1/livekit-token`,
     sdkUrls: [
       'https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js',
       'https://unpkg.com/livekit-client@2/dist/livekit-client.umd.js',
     ],
+  },
+  live: {
+    // Override these millisecond durations through window.MW_CONFIG.live when needed.
+    // Viewers keep listening briefly after hiding a tab; hosts are ended sooner when hidden and later when idle.
+    viewerHiddenGraceMs: 60_000,
+    hostHiddenGraceMs: 60_000,
+    hostIdleGraceMs: 300_000,
   },
   cloudinary: {
     // Set cloudName to deliver images/posters through Cloudinary fetch (f_auto, q_auto, sized). Empty = off.

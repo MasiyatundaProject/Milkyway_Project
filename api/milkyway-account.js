@@ -340,7 +340,7 @@ export default route({
     const room = text(body.room, 120);
     if (!/^mw-(audio|video)-live-[a-f0-9-]{36}$/i.test(room)) throw new ApiError(400, 'Invalid room.');
     // Closing the LiveKit room disconnects everyone right away (uses the site's LiveKit credentials).
-    const closed = await livekit('DeleteRoom', room, {}).then(() => true, () => false);
+    const closed = await livekit('DeleteRoom', room, {}, null, ctx.env).then(() => true, () => false);
     let marked = true;
     try { await ctx.rpc('mw_admin_end_live', { p_room: room }); }
     catch (error) { if (!isMissingSchema(error)) throw error; marked = false; }

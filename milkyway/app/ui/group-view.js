@@ -3,8 +3,8 @@ import { auth } from '../core/net.js';
 import { profiles } from '../data/profiles.js';
 import { searchPeople } from '../data/messages.js';
 import {
-  addGroupMembers, createGroup, decideGroupRequest, joinGroup, leaveGroup,
-  loadGroup, loadGroupMessages, onGroupMessage, removeGroupMember,
+  addGroupMembers, clearGroupMessages, createGroup, decideGroupRequest, deleteGroup, deleteGroupMessage,
+  isActiveGroupMember, joinGroup, leaveGroup, loadGroup, loadGroupMessages, onGroupMessage, removeGroupMember,
   sendGroupMedia, sendGroupMessage, sendGroupOneViewText, setGroupRole, updateGroup,
 } from '../data/groups.js';
 import { consumeViewOnce } from '../data/chat-media.js';
@@ -13,13 +13,14 @@ import { Sheet } from './sheet.js';
 import { avatar, formatDateTime, h, icon, toast } from './dom.js';
 import { ChatComposer, mediaMessageContent } from './chat-composer.js';
 import { WatchParty, watchableUrl } from './watch-party.js';
+import { bindLongPress } from './long-press.js';
 
 const backIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.4 4.6 14 3.2 5.2 12l8.8 8.8 1.4-1.4L8 12z"/></svg>';
 const gearIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13a7.7 7.7 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L14.9 3h-4l-.4 2.9a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.4 11a7.7 7.7 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.8 1.7 1l.4 2.9h4l.4-2.9c.6-.2 1.2-.6 1.7-1l2.5 1 2-3.5zM12.9 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/></svg>';
 
 const button = (label, action, className = 'pill-btn') => h('button', { type: 'button', class: className, onclick: action }, label);
 const sectionTitle = label => h('h3', { class: 'group-section-title' }, label);
-const roleName = role => ({ admin: 'Admin', co_admin: 'Co-admin', member: 'Member' }[role] || 'Member');
+const roleName = role => ({ admin: 'Admin', co_admin: 'Co-admin', member: 'Member', owner: 'Owner' }[role] || 'Member');
 
 export class GroupCreateSheet {
   constructor(onCreated) {
@@ -70,12 +71,20 @@ export class GroupCreateSheet {
 }
 
 export class GroupChatSheet {
-  constructor({ onChanged } = {}) {
+  constructor({ onChanged, onDeleted } = {}) {
     this.onChanged = onChanged;
+    this.onDeleted = onDeleted;
     this.group = null;
     this.messages = new Map();
     this.revealed = new Map();
-    this.sheet = new Sheet({ title: '', className: 'chat-sheet group-chat-sheet', onClose: () => { this.group = null; this.composer.cancelRecording(); this.watchParty.leave(); this.#clearRevealed(); } });
+    this.selectedMessage = null;
+    this.messageActions = new Sheet({
+      title: t('messageActions'), className: 'group-manage-sheet', autoFocus: false,
+      onClose: () => { this.selectedMessage = null; },
+    });
+    this.deleteMessageAction = button(t('deleteMessage'), () => this.#deleteSelectedMessage(), 'pill-btn danger');
+    this.messageActions.body.append(this.deleteMessageAction, button(t('cancel'), () => this.messageActions.close()));
+    this.sheet = new Sheet({ title: '', className: 'chat-sheet group-chat-sheet', onClose: () => { this.group = null; this.messageActions.close(); this.composer.cancelRecording(); this.watchParty.leave(); this.#clearRevealed(); } });
     this.sheet.heading.hidden = true;
     this.name = h('b', {});
     this.subtitle = h('small', { class: 'muted' });
@@ -93,12 +102,18 @@ export class GroupChatSheet {
         h('button', { class: 'icon-btn chat-call', type: 'button', 'aria-label': t('watchTogether'), title: t('watchTogether'), html: icon.play, onclick: () => this.watchParty.openPanel() }),
         h('button', { class: 'icon-btn chat-call', type: 'button', 'aria-label': t('groupManage'), html: gearIcon, onclick: () => this.manager.open(this.group) })),
       this.watchParty.root, this.list, this.composer.form);
-    this.manager = new GroupManager({ onChanged: this.onChanged, onLeave: () => this.sheet.close() });
+    this.manager = new GroupManager({
+        onChanged: this.onChanged,
+        onDeleted: this.onDeleted,
+        onLeave: () => this.sheet.close(),
+        onClearMessages: groupId => this.#clearMessages(groupId),
+    });
     onGroupMessage(event => this.#live(event));
   }
 
   async open(group) {
     if (!group?.id) return;
+    this.messageActions.close();
     this.composer.cancelRecording();
     this.watchParty.join('group', group.id).catch(error => toast(error?.message || t('watchConnectFailed')));
     this.#clearRevealed();
@@ -116,8 +131,9 @@ export class GroupChatSheet {
       const [details, rows] = await Promise.all([loadGroup(groupId), loadGroupMessages(groupId)]);
       if (this.group?.id !== groupId) return;
       this.group = { ...group, ...details.group };
-      await profiles.many((details.members || []).filter(member => member.join_status === 'active').map(member => member.user_id));
-      this.subtitle.textContent = `${(details.members || []).filter(member => member.join_status === 'active').length} ${t('groupMembers').toLowerCase()}`;
+      const activeMembers = (details.members || []).filter(member => isActiveGroupMember(member, { createdBy: this.group.created_by }));
+      await profiles.many(activeMembers.map(member => member.user_id));
+      this.subtitle.textContent = `${activeMembers.length} ${t('groupMembers').toLowerCase()}`;
       this.messages.clear();
       rows.forEach(row => this.messages.set(row.id, row));
       this.#render();
@@ -139,11 +155,13 @@ export class GroupChatSheet {
       const sharedUrl = watchableUrl(row.body)
         || (row.message_type !== 'video_note' && (row.message_type === 'video' || row.media_type?.startsWith('video/'))
           ? watchableUrl(row.media_url) : '');
-      return h('div', { class: `msg${mine ? ' mine' : ''}`, 'data-id': row.id },
+      const bubble = h('div', { class: `msg${mine ? ' mine' : ''}`, 'data-id': row.id },
         !mine ? h('small', { class: 'group-message-sender' }, profile?.name || 'MilkyWay') : null,
         content,
         sharedUrl ? h('button', { class: 'pill-btn watch-message-action', type: 'button', onclick: () => this.watchParty.startFromLink(sharedUrl) }, t('watchTogether')) : null,
         h('small', {}, formatDateTime(row.created_at, { hour: '2-digit', minute: '2-digit' }), row.edited_at ? ` · ${t('edited')}` : ''));
+      if (this.#canDeleteMessage(row)) bindLongPress(bubble, () => this.#openMessageActions(row));
+      return bubble;
     }));
     requestAnimationFrame(() => { this.list.scrollTop = this.list.scrollHeight; });
   }
@@ -163,6 +181,63 @@ export class GroupChatSheet {
   #clearRevealed() {
     for (const media of this.revealed.values()) if (media.media_url?.startsWith('blob:')) URL.revokeObjectURL(media.media_url);
     this.revealed.clear();
+  }
+
+  #canDeleteMessage(row) {
+    return (!row.groupId || row.groupId === this.group?.id) && (row.sender_id === auth.userId
+      || this.group?.created_by === auth.userId
+      || ['admin', 'co_admin', 'owner'].includes(String(this.group?.role || '').toLowerCase()));
+  }
+
+  #openMessageActions(row) {
+    if (!this.#canDeleteMessage(row) || !this.messages.has(row.id)) return;
+    this.selectedMessage = { ...row, groupId: this.group?.id };
+    this.messageActions.open();
+  }
+
+  async #deleteSelectedMessage() {
+    const selected = this.selectedMessage;
+    if (!selected || !this.#canDeleteMessage(selected)) return;
+    if (!confirm(`${t('deleteMessage')}?`)) return;
+    const groupId = selected.groupId;
+    const current = this.group?.id === groupId ? this.messages.get(selected.id) : null;
+    if (!current) { this.messageActions.close(); return; }
+    this.messages.delete(selected.id);
+    this.#clearRevealedMessage(selected.id);
+    this.#render();
+    this.messageActions.close();
+    try {
+      await deleteGroupMessage(groupId, selected.id);
+    } catch (error) {
+      if (this.group?.id === groupId) {
+        this.messages.set(selected.id, current);
+        this.#render();
+      }
+      toast(error?.message || t('groupActionFailed'));
+    }
+  }
+
+  #clearRevealedMessage(id) {
+    const media = this.revealed.get(id);
+    if (media?.media_url?.startsWith('blob:')) URL.revokeObjectURL(media.media_url);
+    this.revealed.delete(id);
+  }
+
+  async #clearMessages(groupId) {
+    if (this.group?.id !== groupId) return;
+    const previous = new Map(this.messages);
+    this.messages.clear();
+    this.#clearRevealed();
+    this.#render();
+    try {
+      await clearGroupMessages(groupId);
+    } catch (error) {
+      if (this.group?.id === groupId) {
+        this.messages = previous;
+        this.#render();
+      }
+      throw error;
+    }
   }
 
   async #send(text, viewOnce = false) {
@@ -215,9 +290,11 @@ export class GroupChatSheet {
 }
 
 class GroupManager {
-  constructor({ onChanged, onLeave }) {
+  constructor({ onChanged, onDeleted, onLeave, onClearMessages }) {
     this.onChanged = onChanged;
+    this.onDeleted = onDeleted;
     this.onLeave = onLeave;
+    this.onClearMessages = onClearMessages;
     this.group = null;
     this.sheet = new Sheet({ title: t('groupManage'), className: 'group-manage-sheet' });
     this.content = h('div', { class: 'group-management' });
@@ -242,10 +319,12 @@ class GroupManager {
 
   #render(data, profileMap) {
     const group = this.group;
-    const elevated = ['admin', 'co_admin'].includes(group.role);
+    const elevated = ['admin', 'co_admin', 'owner'].includes(group.role);
     const creator = group.created_by === auth.userId;
-    const active = data.members.filter(member => member.join_status === 'active');
-    const pending = data.members.filter(member => member.join_status === 'pending');
+    const active = data.members.filter(member => isActiveGroupMember(member, { createdBy: group.created_by }));
+    const activeIds = new Set(active.map(member => member.user_id));
+    const pending = data.members.filter(member => member.join_status === 'pending' && !activeIds.has(member.user_id));
+    const canDelete = creator || ['admin', 'co_admin', 'owner'].includes(group.role);
     const members = h('div', { class: 'group-member-list' });
     for (const member of active) {
       const person = profileMap.get(member.user_id) || { name: 'MilkyWay', username: '', avatar: '' };
@@ -280,6 +359,10 @@ class GroupManager {
       sectionTitle(t('groupMembers')), members,
       elevated ? sectionTitle(`${t('joinRequests')} (${pending.length})`) : null,
       elevated ? (pending.length ? pendingList : h('p', { class: 'muted' }, t('noJoinRequests'))) : null,
+      elevated ? h('section', { class: 'group-message-management' },
+        sectionTitle(t('messageManagement')),
+        button(t('clearGroupMessages'), () => this.#clearMessages(), 'pill-btn danger')) : null,
+      canDelete ? button(t('deleteGroup'), () => this.#delete(), 'pill-btn danger') : null,
       button(t('leaveGroup'), () => this.#leave(), 'pill-btn'));
   }
 
@@ -380,12 +463,36 @@ class GroupManager {
       toast(t('leftGroup'));
     } catch (error) { toast(error?.message || t('groupActionFailed')); }
   }
+
+  async #delete() {
+    if (!confirm(`${t('deleteGroup')}?`)) return;
+    const groupId = this.group.id;
+    this.onDeleted?.(groupId);
+    try {
+      await deleteGroup(groupId);
+      this.sheet.close();
+      this.onChanged?.();
+      this.onLeave?.();
+      toast(t('groupDeleted'));
+    } catch (error) {
+      this.onChanged?.();
+      toast(error?.message || t('groupActionFailed'));
+    }
+  }
+
+  async #clearMessages() {
+    if (!confirm(`${t('clearGroupMessages')}?`)) return;
+    try {
+      await this.onClearMessages?.(this.group.id);
+      toast(t('messagesCleared'));
+    } catch (error) { toast(error?.message || t('groupActionFailed')); }
+  }
 }
 
 export async function joinAndOpenGroup(group, onJoined, onPending) {
   try {
     const result = await joinGroup(group.id);
-    if (result.status === 'active') onJoined?.(group);
+    if (['active', 'approved'].includes(String(result.status || '').toLowerCase())) onJoined?.(group);
     else onPending?.();
   } catch (error) { toast(error?.message || t('groupActionFailed')); }
 }

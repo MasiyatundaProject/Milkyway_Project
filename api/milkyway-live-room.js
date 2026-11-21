@@ -25,20 +25,20 @@ const cleanBackground = value => {
 
 const sourcesFor = (audioRoom, micAllowed) => audioRoom ? (micAllowed ? [MIC] : []) : (micAllowed ? [CAMERA, MIC] : [CAMERA]);
 // An empty source list means "every source" to LiveKit, so a guest left with no allowed source cannot publish at all.
-const setPublish = (room, identity, allowed, audioRoom, micAllowed = true) => {
+const setPublish = (room, identity, allowed, audioRoom, environment, micAllowed = true) => {
   const sources = allowed ? sourcesFor(audioRoom, micAllowed) : [];
   return livekit('UpdateParticipant', room, {
     identity,
     permission: { canSubscribe: true, canPublish: sources.length > 0, canPublishData: true, canPublishSources: sources },
-  });
+  }, null, environment);
 };
 
-async function revokePublish(room, identity, audioRoom) {
+async function revokePublish(room, identity, audioRoom, environment) {
   try {
-    await setPublish(room, identity, false, audioRoom);
+    await setPublish(room, identity, false, audioRoom, environment);
   } catch {
     try {
-      await livekit('RemoveParticipant', room, { identity });
+      await livekit('RemoveParticipant', room, { identity }, null, environment);
     } catch {
       throw new ApiError(503, "LiveKit could not revoke this participant's publishing access.");
     }
@@ -47,12 +47,12 @@ async function revokePublish(room, identity, audioRoom) {
 
 // Short cache so every viewer polling does not hit LiveKit each time.
 const presence = new Map();
-async function connectedIds(room) {
+async function connectedIds(room, environment) {
   const cached = presence.get(room);
   if (cached && Date.now() - cached.at < 2000) return cached.ids;
   let ids = cached?.ids || [];
   try {
-    const data = await livekit('ListParticipants', room, {});
+    const data = await livekit('ListParticipants', room, {}, null, environment);
     ids = (data?.participants || []).map(participant => participant.identity);
   } catch { /* keep the last known list */ }
   presence.set(room, { at: Date.now(), ids });
@@ -116,7 +116,7 @@ async function status(ctx, room, { enter = false } = {}) {
     loadSettings(ctx, room.roomName),
     ctx.rest(`mw_live_room_members?room_name=eq.${enc(room.roomName)}&select=room_name,user_id,name,avatar,state,host_muted,updated_at&order=updated_at.desc&limit=200`),
     ctx.rest(`mw_live_room_messages?room_name=eq.${enc(room.roomName)}&select=id,user_id,name,avatar,kind,body,deleted,created_at&order=created_at.desc&limit=100`),
-    connectedIds(room.roomName),
+    connectedIds(room.roomName, ctx.env),
   ]);
   const myId = ctx.user.id.toLowerCase();
   if (!room.host && settings.blockedIds.includes(myId)) throw new ApiError(403, kickedMessage);
@@ -128,7 +128,7 @@ async function status(ctx, room, { enter = false } = {}) {
     // Every visit starts as a subscriber: a seat or request left from an earlier visit is cleared, and the guest asks
     // again with "Request to join". LiveKit rights are revoked too in case an old connection is still around.
     await upsertMember(ctx, room.roomName, ctx.user.id, { state: 'viewer', host_muted: false });
-    if (own.state === 'speaker') await revokePublish(room.roomName, ctx.user.id, room.audio);
+    if (own.state === 'speaker') await revokePublish(room.roomName, ctx.user.id, room.audio, ctx.env);
     own = { ...own, state: 'viewer', host_muted: false };
     const i = (rows || []).findIndex(row => row.user_id === ctx.user.id);
     if (i >= 0) rows[i] = { ...rows[i], state: 'viewer', host_muted: false };
@@ -194,7 +194,7 @@ async function handle({ ctx, body, method }) {
     if (!invited && (settings.admission === 'broadcast' || settings.allowRequests === false)) throw new ApiError(403, 'The host is not taking guest requests right now.');
     if (action === 'request' && !invited && settings.admission === 'open') {
       const user = await whoAmI(ctx);
-      const granted = await setPublish(room.roomName, me, true, room.audio);
+      const granted = await setPublish(room.roomName, me, true, room.audio, ctx.env);
       if (!granted) throw new ApiError(409, 'You are no longer watching this LIVE.');
       try {
         await ctx.rpc('mw_live_room_allocate_guest_seat', {
@@ -204,7 +204,7 @@ async function handle({ ctx, body, method }) {
           p_avatar: user.avatar,
         });
       } catch (error) {
-        await revokePublish(room.roomName, me, room.audio);
+        await revokePublish(room.roomName, me, room.audio, ctx.env);
         throw error;
       }
       return { state: 'speaker', invited: false };
@@ -227,7 +227,7 @@ async function handle({ ctx, body, method }) {
     const existing = await ownRow();
     if (existing && existing.state !== 'viewer') await upsertMember(ctx, room.roomName, ctx.user.id, { state: 'viewer', host_muted: false });
     // Always revoke: a guest leaving must stop publishing even if the database was already updated.
-    if (action === 'leave-stage' || existing?.state === 'speaker') await revokePublish(room.roomName, ctx.user.id, room.audio);
+    if (action === 'leave-stage' || existing?.state === 'speaker') await revokePublish(room.roomName, ctx.user.id, room.audio, ctx.env);
     return { state: 'viewer' };
   }
 
@@ -237,7 +237,7 @@ async function handle({ ctx, body, method }) {
     if (room.host) return { state: 'speaker' };
     const existing = await ownRow();
     if (existing?.state !== 'speaker') return { state: existing?.state || 'viewer' };
-    const granted = await setPublish(room.roomName, ctx.user.id, true, room.audio, !existing.host_muted);
+    const granted = await setPublish(room.roomName, ctx.user.id, true, room.audio, ctx.env, !existing.host_muted);
     return { state: 'speaker', granted: !!granted };
   }
 
@@ -291,7 +291,7 @@ async function handle({ ctx, body, method }) {
     if (member.state === 'speaker') return { ok: true, state: 'speaker' };
     if (member.state !== 'pending') throw new ApiError(409, 'This person cancelled their request.');
     // Upgrade the guest's live LiveKit connection to publisher. LiveKit answers "not found" when they already left.
-    const granted = await setPublish(room.roomName, userId, true, room.audio);
+    const granted = await setPublish(room.roomName, userId, true, room.audio, ctx.env);
     if (!granted) {
       await ctx.rest(memberPath(room.roomName, userId), { method: 'PATCH', body: { state: 'viewer', host_muted: false, updated_at: new Date().toISOString() } }).catch(() => {});
       throw new ApiError(409, 'This person is no longer watching.');
@@ -304,7 +304,7 @@ async function handle({ ctx, body, method }) {
         p_avatar: member.avatar || '',
       });
     } catch (error) {
-      await revokePublish(room.roomName, userId, room.audio);
+      await revokePublish(room.roomName, userId, room.audio, ctx.env);
       throw error;
     }
     const { [userId]: wasInvited, ...invites } = freshInvites(settings.invites);
@@ -315,7 +315,7 @@ async function handle({ ctx, body, method }) {
   if (action === 'reject' || action === 'remove') {
     const userId = target();
     await ctx.rest(memberPath(room.roomName, userId), { method: 'PATCH', body: { state: 'viewer', host_muted: false, updated_at: new Date().toISOString() } });
-    await revokePublish(room.roomName, userId, room.audio);
+    await revokePublish(room.roomName, userId, room.audio, ctx.env);
     return { ok: true };
   }
 
@@ -326,12 +326,12 @@ async function handle({ ctx, body, method }) {
     const muted = action === 'mute';
     const [member] = await ctx.rest(`${memberPath(room.roomName, userId)}&select=state,host_muted&limit=1`) || [];
     if (member?.state !== 'speaker') throw new ApiError(409, 'This person is not on stage.');
-    await setPublish(room.roomName, userId, true, room.audio, !muted);
+    await setPublish(room.roomName, userId, true, room.audio, ctx.env, !muted);
     try {
       await ctx.rest(memberPath(room.roomName, userId), { method: 'PATCH', body: { host_muted: muted, updated_at: new Date().toISOString() } });
     } catch (error) {
-      try { await setPublish(room.roomName, userId, true, room.audio, !member.host_muted); }
-      catch { await revokePublish(room.roomName, userId, room.audio); }
+      try { await setPublish(room.roomName, userId, true, room.audio, ctx.env, !member.host_muted); }
+      catch { await revokePublish(room.roomName, userId, room.audio, ctx.env); }
       throw error;
     }
     return { ok: true };
@@ -365,8 +365,8 @@ async function handle({ ctx, body, method }) {
     const { [userId]: _gone, ...invites } = freshInvites(settings.invites);
     const result = await update({ blockedIds: withId(settings.blockedIds, userId), invites });
     await ctx.rest(memberPath(room.roomName, userId), { method: 'PATCH', body: { state: 'viewer', host_muted: false, updated_at: new Date().toISOString() } });
-    await revokePublish(room.roomName, userId, room.audio);
-    await livekit('RemoveParticipant', room.roomName, { identity: userId });
+    await revokePublish(room.roomName, userId, room.audio, ctx.env);
+    await livekit('RemoveParticipant', room.roomName, { identity: userId }, null, ctx.env);
     presence.delete(room.roomName);
     return result;
   }
@@ -441,10 +441,10 @@ const STARTING_MS = 90_000;
 async function lives({ ctx }) {
   const rows = (await ctx.rest(`mw_video_live_sessions?is_live=eq.true&select=${LIVE_SELECT}&order=started_at.desc&limit=60`)) || [];
   const named = rows.filter(row => ROOM.test(row.room_name || ''));
-  if (!named.length || !livekitConfigured()) return { sessions: named, verified: false };
+  if (!named.length || !livekitConfigured(ctx.env)) return { sessions: named, verified: false };
   let rooms;
   try {
-    const data = await livekit('ListRooms', null, { names: named.map(row => row.room_name) }, { roomList: true });
+    const data = await livekit('ListRooms', null, { names: named.map(row => row.room_name) }, { roomList: true }, ctx.env);
     rooms = new Map((data?.rooms || []).map(room => [room.name, room]));
   } catch { return { sessions: named, verified: false }; }
   const running = named.filter(row => {

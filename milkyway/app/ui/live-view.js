@@ -4,6 +4,7 @@
 //  - Comments, gifts, likes and viewer counts render from LiveSession events; DOM stays capped (40 comments, 24 hearts).
 import { t } from '../core/i18n.js';
 import { auth } from '../core/net.js';
+import { config } from '../config.js';
 import { lives, watchLives, createSession, endSession } from '../data/live.js';
 import { profiles } from '../data/profiles.js';
 import { actions } from '../data/feed.js';
@@ -20,6 +21,15 @@ import { VOICE_PRESETS } from './voice-effects.js';
 const JOIN_DELAY = 200;
 const MAX_COMMENTS = 40;
 const MAX_HEARTS = 24;
+const VIEWER_HIDDEN_GRACE_MS = configuredGrace(config.live?.viewerHiddenGraceMs, 60_000);
+const HOST_HIDDEN_GRACE_MS = configuredGrace(config.live?.hostHiddenGraceMs, 60_000);
+const HOST_IDLE_GRACE_MS = configuredGrace(config.live?.hostIdleGraceMs, 300_000);
+
+function configuredGrace(value, fallback) {
+  const duration = Number(value);
+  return Number.isFinite(duration) && duration >= 1000 ? duration : fallback;
+}
+
 const roomMembers = status => Array.isArray(status?.members)
   ? status.members.filter(member => member && typeof member === 'object' && member.userId)
   : [];
@@ -51,6 +61,14 @@ function liveChrome({ host = false } = {}) {
   const hearts = h('div', { class: 'live-hearts', 'aria-hidden': 'true' });
   const banner = h('div', { class: 'live-gift-banner', 'aria-live': 'polite' });
   const state = h('div', { class: 'live-state', hidden: true });
+  const resting = h('div', { class: 'live-resting', hidden: true, role: 'status', 'aria-live': 'polite' },
+    h('div', {
+      class: 'live-resting-art',
+      'aria-hidden': 'true',
+      html: '<svg viewBox="0 0 240 180" focusable="false"><defs><radialGradient id="live-rest-glow"><stop stop-color="#c4b5fd" stop-opacity=".85"/><stop offset="1" stop-color="#8b5cf6" stop-opacity="0"/></radialGradient><linearGradient id="live-rest-planet" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#c4b5fd"/><stop offset="1" stop-color="#4f46e5"/></linearGradient></defs><circle cx="120" cy="89" r="67" fill="url(#live-rest-glow)"/><g fill="none" stroke="#c4b5fd" stroke-opacity=".72"><ellipse cx="120" cy="88" rx="91" ry="31" transform="rotate(-20 120 88)"/><ellipse cx="120" cy="88" rx="73" ry="23" transform="rotate(32 120 88)"/></g><circle cx="120" cy="83" r="30" fill="url(#live-rest-planet)"/><path d="M92 88c15 8 40 8 56 0M101 69c13 7 27 7 39 0" fill="none" stroke="#ede9fe" stroke-opacity=".6" stroke-width="3"/><g fill="#fff"><circle cx="35" cy="48" r="2"/><circle cx="197" cy="40" r="2"/><circle cx="207" cy="125" r="1.8"/><circle cx="53" cy="134" r="1.5"/><circle cx="160" cy="20" r="1.5"/><circle cx="82" cy="25" r="1.2"/></g><g fill="none" stroke="#67e8f9" stroke-linecap="round" stroke-width="3"><path d="M37 89c5-11 11-11 16 0s11 11 16 0"/><path d="M171 89c5-11 11-11 16 0s11 11 16 0"/></g><path d="M107 126v9a13 13 0 0 0 26 0v-9" fill="none" stroke="#a5f3fc" stroke-linecap="round" stroke-width="4"/></svg>',
+    }),
+    h('b', { class: 'live-resting-title' }, t('liveResting')),
+    h('span', { class: 'live-resting-message' }, t('liveRadioContinues')));
   const input = h('input', { class: 'live-input', type: 'text', maxlength: '300', placeholder: t('sayHi'), enterkeyhint: 'send', 'aria-label': t('sayHi') });
   const form = h('form', { class: 'live-form', 'data-no-swipe': true }, input);
   // Stream controls: always visible for the host, shown to a viewer while they are a guest on stage.
@@ -80,8 +98,8 @@ function liveChrome({ host = false } = {}) {
   const top = h('div', { class: 'live-top' },
     h('div', { class: 'live-host', 'data-act': 'profile' }, avatarNode, h('div', {}, name, h('small', { class: 'live-tag' }, t('live'))), host ? null : follow),
     viewers, close);
-  const node = h('section', { class: 'slide live-slide' }, grid, brandMark('live'), h('div', { class: 'shade' }), top, tools, pinned, comments, hearts, banner, state, host ? requests : null, bar);
-  node._refs = { avatarNode, name, follow, viewers: viewers.querySelector('b'), viewersWrap: viewers, cover, background, stage, guests, grid, hostLabel, requests, pinned, comments, hearts, banner, state, input, form, tools, micBtn, voiceBtn, camBtn, stageBtn, stageLabel, giftBtn, likeBtn, guestsBadge, seatCount };
+  const node = h('section', { class: 'slide live-slide' }, grid, brandMark('live'), h('div', { class: 'shade' }), resting, top, tools, pinned, comments, hearts, banner, state, host ? requests : null, bar);
+  node._refs = { avatarNode, name, follow, viewers: viewers.querySelector('b'), viewersWrap: viewers, cover, background, stage, guests, grid, hostLabel, requests, pinned, comments, hearts, banner, state, resting, input, form, tools, micBtn, voiceBtn, camBtn, stageBtn, stageLabel, giftBtn, likeBtn, guestsBadge, seatCount };
   // Re-arrange the grid whenever a guest tile appears or leaves (tiles come from both room status and video tracks).
   new MutationObserver(() => layoutGrid(node)).observe(guests, { childList: true });
   return node;
@@ -537,6 +555,10 @@ export class LiveView {
     this.session = null;
     this.unbind = null;
     this.pending = null; // room to focus when the list arrives
+    this.viewerWindowBlurred = false;
+    this.viewerGraceTimer = 0;
+    this.viewerRestingSlide = null;
+    this.viewerGraceExpired = false;
     this.surface = h('div', { class: 'live-pager', tabindex: '0', 'aria-label': 'LIVE' });
     this.empty = h('div', { class: 'live-empty', hidden: true },
       h('p', {}, t('noLives')),
@@ -554,6 +576,9 @@ export class LiveView {
       onChange: () => { this.#leave(); clearTimeout(this.joinTimer); this.joinTimer = setTimeout(() => this.#join(), JOIN_DELAY); },
     });
     this.#bindEvents();
+    document.addEventListener('visibilitychange', () => this.#syncViewerLifecycle());
+    window.addEventListener('blur', () => { this.viewerWindowBlurred = true; this.#syncViewerLifecycle(); });
+    window.addEventListener('focus', () => { this.viewerWindowBlurred = false; this.#syncViewerLifecycle(); });
     lives.subscribe(list => this.#apply(list));
   }
 
@@ -629,7 +654,7 @@ export class LiveView {
       this.invite = new InvitePrompt(session, live.host.name);
       this.invite.open();
     });
-    try { await session.join(); }
+    try { await session.join(); this.#syncViewerLifecycle(); }
     catch (error) {
       if (this.session !== session) return;
       console.warn('[live] join failed', error);
@@ -648,11 +673,85 @@ export class LiveView {
   }
 
   #leave() {
+    clearTimeout(this.viewerGraceTimer);
+    this.viewerGraceTimer = 0;
+    if (this.viewerRestingSlide) {
+      this.viewerRestingSlide.classList.remove('resting', 'resting-expired');
+      this.viewerRestingSlide._refs.resting.hidden = true;
+    }
+    this.viewerRestingSlide = null;
+    this.viewerGraceExpired = false;
     this.invite?.destroy(); this.invite = null;
     this.voicePicker?.destroy(); this.voicePicker = null;
     this.unbind?.(); this.unbind = null;
     this.session?.leave(); this.session = null;
     this.activeSlide = null;
+  }
+
+  #syncViewerLifecycle() {
+    if (this.root.hidden) return;
+    const inactive = document.visibilityState === 'hidden' || this.viewerWindowBlurred;
+    if (!this.session) {
+      if (inactive || !this.viewerGraceExpired) return;
+      const slide = this.viewerRestingSlide;
+      if (slide) {
+        slide.classList.remove('resting', 'resting-expired');
+        slide._refs.resting.hidden = true;
+        slide._refs.resting.querySelector('.live-resting-message').textContent = t('liveRadioContinues');
+      }
+      this.viewerGraceExpired = false;
+      this.viewerRestingSlide = null;
+      if (this.pager.current) {
+        clearTimeout(this.joinTimer);
+        this.joinTimer = setTimeout(() => this.#join(), JOIN_DELAY);
+      }
+      return;
+    }
+    if (this.session.host) return;
+    if (inactive) {
+      if (this.viewerGraceTimer || this.viewerGraceExpired) return;
+      const session = this.session;
+      const slide = this.activeSlide;
+      if (!slide) return;
+      this.viewerRestingSlide = slide;
+      slide.classList.add('resting');
+      slide._refs.resting.hidden = false;
+      this.viewerGraceTimer = setTimeout(() => {
+        this.viewerGraceTimer = 0;
+        if (this.session !== session || this.root.hidden) return;
+        if (document.visibilityState !== 'hidden' && !this.viewerWindowBlurred) {
+          this.#syncViewerLifecycle();
+          return;
+        }
+        this.#leave();
+        this.viewerGraceExpired = true;
+        this.viewerRestingSlide = slide;
+        slide.classList.add('resting', 'resting-expired');
+        slide._refs.resting.hidden = false;
+        slide._refs.resting.querySelector('.live-resting-message').textContent = t('liveRestingDisconnected');
+      }, VIEWER_HIDDEN_GRACE_MS);
+      return;
+    }
+    clearTimeout(this.viewerGraceTimer);
+    this.viewerGraceTimer = 0;
+    if (this.viewerGraceExpired) {
+      const slide = this.viewerRestingSlide;
+      if (slide) {
+        slide.classList.remove('resting', 'resting-expired');
+        slide._refs.resting.hidden = true;
+        slide._refs.resting.querySelector('.live-resting-message').textContent = t('liveRadioContinues');
+      }
+      this.viewerGraceExpired = false;
+      this.viewerRestingSlide = null;
+      if (!this.session && this.pager.current && !this.root.hidden) {
+        clearTimeout(this.joinTimer);
+        this.joinTimer = setTimeout(() => this.#join(), JOIN_DELAY);
+      }
+    } else if (this.viewerRestingSlide) {
+      this.viewerRestingSlide.classList.remove('resting');
+      this.viewerRestingSlide._refs.resting.hidden = true;
+      this.viewerRestingSlide = null;
+    }
   }
 
   #bindEvents() {
@@ -788,17 +887,84 @@ export class LiveView {
     const controls = new HostControls(session, { openProfile: person => this.hooks.openProfile(person) });
     const unbind = connectUi(stage, session);
     let finished = false;
-    const finish = async () => {
+    let hostIdleTimer = 0;
+    let hostHiddenTimer = 0;
+    let hostBlurred = false;
+    let hostLifecycleStarted = false;
+    const hostInactive = () => document.visibilityState === 'hidden' || hostBlurred;
+    const scheduleHostIdle = () => {
+      clearTimeout(hostIdleTimer);
+      if (!hostLifecycleStarted || hostInactive()) return;
+      hostIdleTimer = setTimeout(() => {
+        hostIdleTimer = 0;
+        if (!hostInactive()) void finish(t('liveHostIdleEnded'));
+        else syncHostLifecycle();
+      }, HOST_IDLE_GRACE_MS);
+    };
+    const syncHostLifecycle = () => {
+      if (!hostLifecycleStarted || finished) return;
+      if (hostInactive()) {
+        clearTimeout(hostIdleTimer);
+        hostIdleTimer = 0;
+        if (!hostHiddenTimer) {
+          hostHiddenTimer = setTimeout(() => {
+            hostHiddenTimer = 0;
+            if (hostInactive()) void finish(t('liveHostIdleEnded'));
+          }, HOST_HIDDEN_GRACE_MS);
+        }
+      } else {
+        clearTimeout(hostHiddenTimer);
+        hostHiddenTimer = 0;
+        scheduleHostIdle();
+      }
+    };
+    const onHostVisibility = () => syncHostLifecycle();
+    const onHostBlur = () => { hostBlurred = true; syncHostLifecycle(); };
+    const onHostFocus = () => { hostBlurred = false; syncHostLifecycle(); };
+    const onHostActivity = () => { if (!hostInactive()) scheduleHostIdle(); };
+    const startHostLifecycle = () => {
+      hostLifecycleStarted = true;
+      hostBlurred = !document.hasFocus();
+      document.addEventListener('visibilitychange', onHostVisibility);
+      window.addEventListener('blur', onHostBlur);
+      window.addEventListener('focus', onHostFocus);
+      stage.addEventListener('pointerdown', onHostActivity);
+      stage.addEventListener('keydown', onHostActivity);
+      stage.addEventListener('touchstart', onHostActivity);
+      syncHostLifecycle();
+    };
+    const stopHostLifecycle = () => {
+      hostLifecycleStarted = false;
+      clearTimeout(hostIdleTimer);
+      clearTimeout(hostHiddenTimer);
+      document.removeEventListener('visibilitychange', onHostVisibility);
+      window.removeEventListener('blur', onHostBlur);
+      window.removeEventListener('focus', onHostFocus);
+      stage.removeEventListener('pointerdown', onHostActivity);
+      stage.removeEventListener('keydown', onHostActivity);
+      stage.removeEventListener('touchstart', onHostActivity);
+    };
+    const finish = async reason => {
       if (finished) return;
       finished = true;
+      stopHostLifecycle();
       unbind();
       picker.destroy();
       controls.destroy();
-      await session.end().catch(() => {});
-      await endSession(room).catch(() => {});
+      const localLeave = session.leave();
+      let endError = null;
+      let statusError = null;
+      const endRequest = session.end().catch(error => { endError = error; });
+      const statusRequest = endSession(room).catch(error => { statusError = error; });
       stage.remove();
-      lives.refresh();
       this.hooks.onClose();
+      await Promise.all([endRequest, statusRequest]);
+      try { await localLeave; } catch (error) { endError ||= error; }
+      lives.refresh();
+      if (endError) console.warn('[live] LiveKit end request failed', endError);
+      if (statusError) console.warn('[live] LIVE status update failed', statusError);
+      if (endError && statusError) toast(endError.message || statusError.message || t('liveUnavailable'));
+      else if (reason) toast(reason);
     };
     stage.addEventListener('click', async event => {
       const button = event.target.closest('[data-act]');
@@ -853,6 +1019,7 @@ export class LiveView {
     });
     try {
       await createSession({ room, title: live.title });
+      startHostLifecycle();
       await session.join();
     } catch (error) {
       console.warn('[live] broadcast failed', error);

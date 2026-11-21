@@ -1,10 +1,12 @@
 import { route, ApiError, SUPABASE, requireUuid } from './_lib/supa.js';
-import { livekitUrl, livekitUsable, accessToken, closeRoom, CAMERA, MIC } from './_lib/livekit.js';
+import { livekitUrl, livekitConfigurationError, accessToken, closeRoom, CAMERA, MIC, SCREEN_SHARE } from './_lib/livekit.js';
 
 const OUTCOMES = ['ended', 'missed', 'cancelled', 'rejected', 'disconnected'];
 const RING_WINDOW_MS = 60000;
 const COLUMNS = 'id,caller_id,callee_id,status,offer,answer,created_at,ended_at';
 const POST_ONLY = method => { if (method !== 'POST') throw new ApiError(405, 'Method not allowed.'); };
+const dmRoomName = call => `dm-call-${[call.caller_id, call.callee_id].map(id => id.toLowerCase()).sort().join('-')}`;
+const callTypeOf = call => call?.offer?.callType === 'video' || call?.offer?.mode === 'video' || call?.offer?.videoEnabled === true ? 'video' : 'audio';
 
 async function loadCall(ctx, id) {
   const [call] = await ctx.rest(`mw_dm_calls?id=eq.${requireUuid(id, 'call')}&select=${COLUMNS}&limit=1`) || [];
@@ -13,49 +15,33 @@ async function loadCall(ctx, id) {
   return call;
 }
 
-// Asks the Supabase LiveKit function (which in turn calls /api/milkyway-media-authorize) for a room token.
+// Issues a participant-scoped token for the deterministic room shared by the two call participants.
 async function access(ctx, call, name) {
-  const video = call.offer?.mode === 'video';
-  const roomName = `mw-conversation-${video ? 'video' : 'audio'}-${call.id}`;
-  // Signed here with the site's LiveKit credentials (the same ones LIVE uses), so the token always matches the
-  // LiveKit project in LIVEKIT_URL. A token signed with another project's key fails with
-  // "could not establish signal connection: invalid API key".
-  if (await livekitUsable()) {
-    let profile = null;
-    try { [profile] = await ctx.rest(`mw_profiles?id=eq.${ctx.user.id}&select=display_name,username,avatar_url&limit=1`) || []; } catch {}
-    const token = accessToken({
-      identity: ctx.user.id, room: roomName, canPublish: true, sources: video ? [CAMERA, MIC] : [MIC], ttlSeconds: 60,
-      name: String(name || profile?.display_name || profile?.username || 'MilkyWay user').slice(0, 80),
-      metadata: JSON.stringify({ avatar: String(profile?.avatar_url || '').slice(0, 500) }),
-    });
-    return { token, serverUrl: livekitUrl(), roomName, mode: video ? 'video' : 'audio' };
-  }
-  let response;
-  try {
-    response = await fetch(`${SUPABASE}/functions/v1/livekit-token`, {
-      method: 'POST',
-      headers: { apikey: ctx.key, Authorization: `Bearer ${ctx.token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roomName, action: 'token', ...(name ? { name } : {}) }),
-      signal: AbortSignal.timeout(15000),
-    });
-  } catch { throw new ApiError(503, 'Call service unavailable.'); }
-  const data = await response.json().catch(() => null);
-  if (!response.ok || typeof data?.token !== 'string' || typeof data?.serverUrl !== 'string') {
-    throw new ApiError([401, 403, 404].includes(response.status) ? response.status : 503, data?.error || 'Call authorization failed.');
-  }
-  return { token: data.token, serverUrl: data.serverUrl, roomName };
+  const callType = callTypeOf(call);
+  const videoEnabled = callType === 'video';
+  const configError = livekitConfigurationError(ctx.env);
+  if (configError) throw new ApiError(503, configError);
+  const roomName = dmRoomName(call);
+  let profile = null;
+  try { [profile] = await ctx.rest(`mw_profiles?id=eq.${ctx.user.id}&select=display_name,username,avatar_url&limit=1`) || []; } catch {}
+  const token = accessToken({
+    identity: ctx.user.id, room: roomName, canPublish: true, sources: videoEnabled ? [CAMERA, MIC, SCREEN_SHARE] : [MIC], ttlSeconds: 60,
+    name: String(name || profile?.display_name || profile?.username || 'MilkyWay user').slice(0, 80),
+    metadata: JSON.stringify({ avatar: String(profile?.avatar_url || '').slice(0, 500), callType, videoEnabled }),
+  }, ctx.env);
+  return { token, serverUrl: livekitUrl(ctx.env), roomName, mode: callType, callType, videoEnabled };
 }
 
 const cleanName = value => typeof value === 'string' ? value.trim().slice(0, 80) : '';
 
 // Best-effort realtime nudge to the other person's open app (apps listen on mw-calls-<user id>).
-// The signal only names the call; the client re-reads it from this API, and 1-second polling remains the fallback.
-async function nudge(ctx, userId, id, kind) {
+// The signal includes call type for fast UI setup; the client re-reads the call, and polling remains the fallback.
+async function nudge(ctx, userId, id, kind, callType = 'audio') {
   try {
     await fetch(`${SUPABASE}/realtime/v1/api/broadcast`, {
       method: 'POST',
       headers: { apikey: ctx.key, Authorization: `Bearer ${ctx.token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [{ topic: `mw-calls-${userId}`, event: 'call', payload: { id, kind }, private: false }] }),
+      body: JSON.stringify({ messages: [{ topic: `mw-calls-${userId}`, event: 'call', payload: { id, kind, callType, videoEnabled: callType === 'video' }, private: false }] }),
       signal: AbortSignal.timeout(4000),
     });
   } catch { /* polling covers it */ }
@@ -70,24 +56,31 @@ export default route({
 
   start: async ({ ctx, body, method }) => {
     POST_ONLY(method);
+    const configError = livekitConfigurationError(ctx.env);
+    if (configError) throw new ApiError(503, configError);
     const callee = requireUuid(body.callee, 'callee');
     if (callee === ctx.user.id) throw new ApiError(400, 'You cannot call yourself.');
-    const mode = body.mode === 'video' ? 'video' : 'audio';
+    const callType = body.callType === 'video' || body.mode === 'video' || body.videoEnabled === true ? 'video' : 'audio';
+    const videoEnabled = callType === 'video';
     const name = cleanName(body.name);
+    const [existing] = await ctx.rest(
+      `mw_dm_calls?select=id&status=in.(ringing,accepted)&or=(and(caller_id.eq.${ctx.user.id},callee_id.eq.${callee}),and(caller_id.eq.${callee},callee_id.eq.${ctx.user.id}))&limit=1`,
+    ) || [];
+    if (existing) throw new ApiError(409, 'A call with this person is already in progress.');
     // A caller only ever has one ringing call; older ones are closed as cancelled.
     const previous = await ctx.rest(`mw_dm_calls?caller_id=eq.${ctx.user.id}&status=eq.ringing`, {
       method: 'PATCH', returning: true,
       body: { status: 'ended', ended_at: new Date().toISOString(), answer: { outcome: 'cancelled' } },
     }) || [];
     for (const oldCall of previous) {
-      const oldRoom = `mw-conversation-${oldCall.offer?.mode === 'video' ? 'video' : 'audio'}-${oldCall.id}`;
+      const oldRoom = dmRoomName(oldCall);
       await closeRoom(ctx, oldRoom, { immediate: false });
     }
-    const [call] = await ctx.rest('mw_dm_calls', { method: 'POST', returning: true, body: { caller_id: ctx.user.id, callee_id: callee, status: 'ringing', offer: { transport: 'livekit', mode, name } } }) || [];
+    const [call] = await ctx.rest('mw_dm_calls', { method: 'POST', returning: true, body: { caller_id: ctx.user.id, callee_id: callee, status: 'ringing', offer: { transport: 'livekit', mode: callType, callType, videoEnabled, name } } }) || [];
     if (!call) throw new ApiError(503, 'Call could not start.');
     // Let the client request its token after opening the call UI; token issuance must not delay ringing.
-    void nudge(ctx, callee, call.id, 'ring');
-    return { call };
+    void nudge(ctx, callee, call.id, 'ring', callType);
+    return { call, callType, videoEnabled };
   },
 
   accept: async ({ ctx, body, method }) => {
@@ -106,7 +99,7 @@ export default route({
     const id = requireUuid(body.id, 'call');
     const [call] = await ctx.rest(`mw_dm_calls?id=eq.${id}&callee_id=eq.${ctx.user.id}&status=eq.ringing`, { method: 'PATCH', returning: true, body: { status: 'declined', ended_at: new Date().toISOString(), answer: { outcome: 'rejected' } } }) || [];
     if (!call) throw new ApiError(409, 'This call is no longer ringing.');
-    const cleanupPending = !await closeRoom(ctx, `mw-conversation-${call.offer?.mode === 'video' ? 'video' : 'audio'}-${call.id}`);
+    const cleanupPending = !await closeRoom(ctx, dmRoomName(call));
     await nudge(ctx, call.caller_id, call.id, 'declined');
     return { call, cleanupPending };
   },
@@ -120,7 +113,7 @@ export default route({
       const [ended] = await ctx.rest(`mw_dm_calls?id=eq.${call.id}&status=in.(ringing,accepted)`, { method: 'PATCH', returning: true, body: { status: 'ended', ended_at: new Date().toISOString(), answer: { ...(call.answer || {}), outcome } } }) || [];
       result = ended || call;
     }
-    const cleanupPending = !await closeRoom(ctx, `mw-conversation-${call.offer?.mode === 'video' ? 'video' : 'audio'}-${call.id}`);
+    const cleanupPending = !await closeRoom(ctx, dmRoomName(call));
     await nudge(ctx, call.caller_id === ctx.user.id ? call.callee_id : call.caller_id, call.id, 'ended');
     return { call: result, cleanupPending };
   },
@@ -142,7 +135,7 @@ export default route({
         body: { status: 'ended', ended_at: new Date().toISOString(), answer: { outcome: 'missed' } },
       }) || [];
       call = ended || call;
-      await closeRoom(ctx, `mw-conversation-${call.offer?.mode === 'video' ? 'video' : 'audio'}-${call.id}`, { immediate: false });
+      await closeRoom(ctx, dmRoomName(call), { immediate: false });
       throw new ApiError(409, 'This call has ended.');
     }
     return access(ctx, call, cleanName(body.name));

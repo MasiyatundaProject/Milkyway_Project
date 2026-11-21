@@ -1,5 +1,6 @@
 // Tests for the rebuilt MilkyWay core: the single-request feed API and the non-blocking app shell.
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { test } from 'node:test';
 import feed from '../api/milkyway-feed.js';
@@ -7,7 +8,7 @@ import liveRoom from '../api/milkyway-live-room.js';
 import callApi from '../api/milkyway-call.js';
 import livekitToken from '../api/milkyway-livekit-token.js';
 import { runApi } from '../api/_lib/fetch-adapter.js';
-import { closeRoom, livekitUsable } from '../api/_lib/livekit.js';
+import { accessToken, closeRoom, livekitConfigurationError, livekitConfigured, livekitUrl, livekitUsable, SCREEN_SHARE } from '../api/_lib/livekit.js';
 import { postShareResponse } from '../api/_lib/post-share.js';
 import { assertRoomAccess } from '../milkyway/app/core/livekit-access.js';
 import { identifyMediaFile, mediaInfo, openFilePicker } from '../milkyway/app/core/media-files.js';
@@ -23,6 +24,10 @@ test('group management schema and UI implement guarded joins, invitations and co
   const inbox = readFileSync(new URL('../milkyway/app/ui/inbox-view.js', import.meta.url), 'utf8');
   const view = readFileSync(new URL('../milkyway/app/ui/group-view.js', import.meta.url), 'utf8');
   const data = readFileSync(new URL('../milkyway/app/data/groups.js', import.meta.url), 'utf8');
+  const longPress = readFileSync(new URL('../milkyway/app/ui/long-press.js', import.meta.url), 'utf8');
+  const approvalMigration = readFileSync(new URL('../supabase/migrations/20261211_milkyway_group_approved_owner.sql', import.meta.url), 'utf8');
+  const moderationMigration = readFileSync(new URL('../supabase/migrations/20261212_milkyway_group_message_moderation.sql', import.meta.url), 'utf8');
+  const repair = readFileSync(new URL('../supabase/milkyway-schema-repair.sql', import.meta.url), 'utf8');
   assert.match(migration, /join_mode in \('open', 'request_approval', 'invite_only'\)/);
   assert.match(migration, /add column if not exists avatar_url text not null default ''/);
   assert.match(migration, /add column if not exists join_mode text not null default 'invite_only'/);
@@ -47,6 +52,32 @@ test('group management schema and UI implement guarded joins, invitations and co
   assert.match(api, /missingGroupColumn/);
   assert.match(api, /\['id', 'name', 'caption', \.\.\.optionalColumns, 'created_at'\]/);
   assert.match(api, /optionalColumns\.delete\(missing\)/);
+  assert.match(api, /created_by: group\.created_by/);
+  assert.match(api, /listCreatedGroups/);
+  assert.match(inbox, /isActiveGroupMember\(group\)/);
+  assert.match(view, /isActiveGroupMember\(member/);
+  assert.match(view, /canDelete = creator \|\| \['admin', 'co_admin', 'owner'\]\.includes\(group\.role\)/);
+  assert.match(view, /deleteGroup\(groupId\)/);
+  assert.match(inbox, /bindLongPress\(row, \(\) => this\.#openGroupActions\(group\)\)/);
+  assert.match(view, /bindLongPress\(bubble, \(\) => this\.#openMessageActions\(row\)\)/);
+  assert.match(view, /clearGroupMessages\(groupId\)/);
+  assert.match(view, /deleteGroupMessage\(groupId, selected\.id\)/);
+  assert.match(api, /'clear-messages': async/);
+  assert.match(api, /'delete-message': async/);
+  assert.match(api, /Only group admins or the creator can clear messages/);
+  assert.match(api, /Only the sender or a group admin can delete this message/);
+  assert.match(data, /request\('clear-messages'/);
+  assert.match(data, /request\('delete-message'/);
+  assert.match(longPress, /pointerdown/);
+  assert.match(longPress, /contextmenu/);
+  assert.match(moderationMigration, /sender_id = auth\.uid\(\)\s+or public\.mw_dm_is_group_admin/);
+  assert.match(moderationMigration, /role in \('admin', 'co_admin', 'owner'\)/);
+  assert.match(approvalMigration, /join_status in \('active', 'approved', 'pending', 'invited'\)/);
+  assert.match(approvalMigration, /role in \('admin', 'co_admin', 'member', 'owner'\)/);
+  assert.match(approvalMigration, /Only group admins or the creator can delete the group/);
+  assert.match(repair, /supabase\/migrations\/20261212_milkyway_group_message_moderation\.sql/);
+  assert.match(repair, /supabase\/migrations\/20261211_milkyway_group_approved_owner\.sql/);
+  assert.match(repair, /Only group admins or the creator can delete the group/);
 });
 
 test('DM media notes include private one-view storage and recording controls', () => {
@@ -78,8 +109,9 @@ test('DM media notes include private one-view storage and recording controls', (
   assert.match(api, /mw_message_complete_once/);
 });
 
-test('Walkie-Talkie uses hold-to-record controls and the existing DM/group voice-note pipeline', () => {
+test('Walkie-Talkie uses hold-to-record controls and sends through DM and protected group pipelines', () => {
   const walkie = readFileSync(new URL('../milkyway/app/ui/walkie-talkie.js', import.meta.url), 'utf8');
+  const groups = readFileSync(new URL('../milkyway/app/data/groups.js', import.meta.url), 'utf8');
   const main = readFileSync(new URL('../milkyway/app/main.js', import.meta.url), 'utf8');
   const shell = readFileSync(new URL('../milkyway/index.html', import.meta.url), 'utf8');
   const composer = readFileSync(new URL('../milkyway/app/ui/chat-composer.js', import.meta.url), 'utf8');
@@ -87,7 +119,12 @@ test('Walkie-Talkie uses hold-to-record controls and the existing DM/group voice
   assert.match(walkie, /pointerdown/);
   assert.match(walkie, /pointerup/);
   assert.match(walkie, /sendDirectMedia/);
-  assert.match(walkie, /sendGroupMedia/);
+  assert.match(walkie, /sendGroupWalkie/);
+  assert.match(walkie, /loadLatestGroupWalkie/);
+  assert.match(walkie, /downloadGroupWalkie/);
+  assert.match(walkie, /#stopGroupListening/);
+  assert.match(groups, /filter: `group_id=eq\.\$\{id\}`/);
+  assert.match(groups, /removeChannel\(entry\.channel\)/);
   assert.match(walkie, /cancelRecording\(\)/);
   assert.match(main, /#walkieEntry/);
   assert.match(shell, /id="walkieEntry"/);
@@ -97,6 +134,19 @@ test('Walkie-Talkie uses hold-to-record controls and the existing DM/group voice
   assert.match(styles, /\.walkie-label \{[^}]*font-size: 9px/);
   assert.match(styles, /\.walkie-entry\.hide-label \.walkie-label \{ display: none; \}/);
   assert.match(styles, /\.walkie-talk-button/);
+});
+
+test('Group Walkie audio is membership-authorized and stored privately', () => {
+  const migration = readFileSync(new URL('../supabase/migrations/20261210_milkyway_group_walkie.sql', import.meta.url), 'utf8');
+  const groups = readFileSync(new URL('../api/milkyway-groups.js', import.meta.url), 'utf8');
+  const media = readFileSync(new URL('../milkyway/app/data/chat-media.js', import.meta.url), 'utf8');
+  assert.match(migration, /'mw-group-walkie', 'mw-group-walkie', false/);
+  assert.match(migration, /mw_dm_is_group_member/);
+  assert.match(groups, /requireActiveGroupMember/);
+  assert.match(groups, /body\.storagePath !== storagePath/);
+  assert.match(groups, /walkie-history/);
+  assert.match(media, /from\('mw-group-walkie'\)\.download/);
+  assert.match(media, /from\('mw-group-walkie'\)\.upload/);
 });
 
 test('Watch Together synchronizes authorized chat playback and cleans up its player', () => {
@@ -162,6 +212,91 @@ test('ordinary LiveKit token checks avoid RoomService management requests', asyn
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+  }
+});
+
+test('LiveKit reads Cloudflare bindings first and identifies missing credentials by name', () => {
+  const bindings = {
+    LIVEKIT_URL: 'wss://binding-live.example.test',
+    LIVEKIT_API_KEY: 'binding-key',
+    LIVEKIT_API_SECRET: 'binding-secret',
+  };
+  assert.equal(livekitConfigured(bindings), true);
+  assert.equal(livekitUrl(bindings), bindings.LIVEKIT_URL);
+  assert.equal(livekitConfigurationError({ LIVEKIT_URL: bindings.LIVEKIT_URL, LIVEKIT_API_KEY: '' }),
+    'LiveKit is not configured. Missing LIVEKIT_API_KEY, LIVEKIT_API_SECRET. Set LIVEKIT_URL in [vars] and LIVEKIT_API_KEY / LIVEKIT_API_SECRET as Cloudflare secrets.');
+  assert.match(livekitConfigurationError({ ...bindings, LIVEKIT_URL: 'not-a-url' }), /LIVEKIT_URL is invalid/);
+  const claims = JSON.parse(Buffer.from(accessToken({ identity: A, room: `dm-call-${A}-${B}`, canPublish: true }, bindings).split('.')[1], 'base64url'));
+  assert.equal(claims.iss, bindings.LIVEKIT_API_KEY);
+  assert.equal(claims.sub, A);
+  assert.equal(claims.video.room, `dm-call-${A}-${B}`);
+});
+
+test('Hosted API routes dispatch DM video-call tokens to the configured LiveKit signer', async () => {
+  assert.equal(SCREEN_SHARE, 3);
+  const fetchAdapter = readFileSync(new URL('../api/_lib/fetch-adapter.js', import.meta.url), 'utf8');
+  const cloudflareApi = readFileSync(new URL('../functions/api/_middleware.js', import.meta.url), 'utf8');
+  const netlifyApi = readFileSync(new URL('../netlify/functions/milkyway-api.mjs', import.meta.url), 'utf8');
+  const server = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  assert.match(fetchAdapter, /'milkyway-call': call/);
+  assert.match(cloudflareApi, /runApi\(name, request, env\)/);
+  assert.match(netlifyApi, /runApi\(context\.params\.name, request\)/);
+  assert.match(netlifyApi, /path: '\/api\/:name'/);
+  assert.match(server, /app\.all\('\/api\/:name'/);
+
+  const originalFetch = globalThis.fetch;
+  const callId = P(81);
+  const call = {
+    id: callId, caller_id: A, callee_id: B, status: 'accepted',
+    offer: { mode: 'video', callType: 'video', videoEnabled: true }, created_at: new Date().toISOString(),
+  };
+  globalThis.fetch = async address => {
+    const url = String(address);
+    if (url.endsWith('/auth/v1/user')) return new Response(JSON.stringify({ id: A }), { status: 200 });
+    if (url.includes('/rest/v1/mw_dm_calls?')) return new Response(JSON.stringify([call]), { status: 200 });
+    if (url.includes('/rest/v1/mw_profiles?')) return new Response('[]', { status: 200 });
+    throw new Error(`Unexpected DM token request: ${url}`);
+  };
+  try {
+    const response = await runApi('milkyway-call', new Request(`https://www.masiyatunda.com/api/milkyway-call?action=token`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer test-session', apikey: 'test-public-key', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: callId, name: 'Caller' }),
+    }), {
+      LIVEKIT_URL: 'wss://binding-live.example.test',
+      LIVEKIT_API_KEY: 'binding-key',
+      LIVEKIT_API_SECRET: 'binding-secret',
+    });
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(payload.serverUrl, 'wss://binding-live.example.test');
+    assert.equal(payload.callType, 'video');
+    assert.equal(payload.videoEnabled, true);
+    const [headerPart, claimsPart, signature] = payload.token.split('.');
+    const header = JSON.parse(Buffer.from(headerPart, 'base64url'));
+    const claims = JSON.parse(Buffer.from(claimsPart, 'base64url'));
+    assert.equal(header.alg, 'HS256');
+    assert.equal(signature, createHmac('sha256', 'binding-secret').update(`${headerPart}.${claimsPart}`).digest('base64url'));
+    assert.equal(claims.iss, 'binding-key');
+    assert.equal(claims.sub, A);
+    assert.equal(claims.video.room, `dm-call-${A}-${B}`);
+    assert.equal(claims.video.roomJoin, true);
+    assert.equal(claims.video.canPublish, true);
+    assert.equal(claims.video.canSubscribe, true);
+    assert.equal(claims.video.canPublishData, true);
+    assert.deepEqual(claims.video.canPublishSources, ['camera', 'microphone', 'screen_share']);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(JSON.parse(claims.metadata), { avatar: '', callType: 'video', videoEnabled: true });
+    const missingResponse = await runApi('milkyway-call', new Request('https://www.masiyatunda.com/api/milkyway-call?action=start', {
+      method: 'POST',
+      headers: { authorization: 'Bearer test-session', apikey: 'test-public-key', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ callee: B, mode: 'audio' }),
+    }), { LIVEKIT_URL: 'wss://binding-live.example.test' });
+    const missing = await missingResponse.json();
+    assert.equal(missingResponse.status, 503);
+    assert.match(missing.error, /Missing LIVEKIT_API_KEY, LIVEKIT_API_SECRET/);
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
 
@@ -563,24 +698,61 @@ test('LIVE room UPSERT targets have unique indexes after duplicate rows are reco
   assert.match(migration, /notify pgrst, 'reload schema'/i);
 });
 
-test('DM call connection validates token endpoints and offers an in-call retry on LiveKit errors', () => {
+test('DM call connection uses authenticated LiveKit tokens and reports server configuration failures', () => {
   const callView = readFileSync(new URL('../milkyway/app/ui/call-view.js', import.meta.url), 'utf8');
+  const callCss = readFileSync(new URL('../milkyway/app/app.css', import.meta.url), 'utf8');
   const liveKit = readFileSync(new URL('../api/_lib/livekit.js', import.meta.url), 'utf8');
   const callApi = readFileSync(new URL('../api/milkyway-call.js', import.meta.url), 'utf8');
   const translations = readFileSync(new URL('../milkyway/app/core/i18n.js', import.meta.url), 'utf8');
-  assert.match(callApi, /livekitUsable\(\)/);
-  assert.match(callApi, /serverUrl:\s*livekitUrl\(\)/);
+  assert.match(callApi, /livekitConfigurationError\(ctx\.env\)/);
+  assert.doesNotMatch(callApi, /functions\/v1\/livekit-token/);
+  assert.match(callApi, /serverUrl:\s*livekitUrl\(ctx\.env\)/);
+  assert.match(callApi, /const dmRoomName = call => `dm-call-/);
+  assert.match(callApi, /const roomName = dmRoomName\(call\)/);
   assert.match(liveKit, /LIVEKIT_URL.*LIVEKIT_API_KEY.*LIVEKIT_API_SECRET/);
-  assert.match(liveKit, /const validLivekitUrl = \(\) =>/);
+  assert.match(liveKit, /const validLivekitUrl = environment =>/);
+  assert.match(liveKit, /environment \? environment\[name\] \?\? '' : process\.env\[name\]/);
+  assert.match(liveKit, /ctx\.env/);
   assert.match(liveKit, /url\.pathname === '\/'.*!url\.username/);
   assert.match(callView, /callAccessToken\(roomName, this\.call\.id, auth\.name\)/);
-  assert.match(callView, /directCallToken\(roomName, auth\.name\)/);
+  assert.match(callApi, /offer: \{ transport: 'livekit', mode: callType, callType, videoEnabled, name \}/);
+  assert.match(callApi, /payload: \{ id, kind, callType, videoEnabled: callType === 'video' \}/);
+  assert.match(callApi, /roomJoin: true, canSubscribe: true, canPublishData: true, canPublish/);
+  assert.match(callView, /callTypeOf = call => .*videoEnabled/);
+  assert.match(callView, /this\.camOn = this\.callType === 'video'/);
+  assert.match(callView, /callType, videoEnabled, name: auth\.name/);
+  assert.match(callView, /#startRingtone/);
+  assert.match(callView, /#stopRingtone/);
+  assert.match(callView, /track\.attach\(element\)/);
+  assert.match(callView, /element\.autoplay = true/);
+  assert.match(callView, /element\.playsInline = true/);
+  assert.match(callView, /#showMediaError\(error, 'camera publishing'\)/);
+  assert.match(callView, /#showMediaError\(error, 'camera toggle'\)/);
+  assert.match(callView, /CALL_TOKEN_ENDPOINT = `\$\{config\.api\.base\}\/milkyway-call\?action=token`/);
+  assert.match(callView, /action === 'token' \? CALL_TOKEN_ENDPOINT/);
+  assert.match(callView, /\.\.\.\(action === 'token' \? \{ cache: 'no-store' \} : \{\}\)/);
+  assert.match(callView, /participantIdentity: auth\.userId/);
+  assert.match(callView, /roomName: this\.roomName/);
+  assert.match(callView, /errorCode: callErrorCode\(error\)/);
+  assert.match(callView, /console\.error\(`\[call\] \$\{operation\} failed`, diagnostics, error\)/);
+  assert.match(callView, /this\.errorMessage\.textContent = `\$\{operation === 'camera publishing'/);
+  assert.match(callView, /insufficient permissions\\D\*\(\\d\+\)/);
+  assert.doesNotMatch(callCss, /\.call-layer\[data-mode="audio"\] \.call-local/);
+  assert.doesNotMatch(callView, /await directCallToken/);
+  assert.doesNotMatch(callView, /directTokenEndpoint|directCallToken/);
+  assert.match(callView, /await room\.connect\(access\.serverUrl, access\.token/);
+  assert.match(callView, /setMicrophoneEnabled\(this\.micOn\)/);
+  assert.match(callView, /setCameraEnabled\(this\.camOn/);
+  assert.match(callView, /await room\.localParticipant\.setCameraEnabled\(true,[\s\S]*?#showMediaError\(error, 'camera publishing'\)/);
+  assert.match(callView, /publication\.track\?\.detach\(\)/);
+  assert.match(callView, /room\.disconnect\(\)/);
+  assert.match(callView, /playAudioBtn/);
+  assert.match(callView, /#enableRemoteAudio/);
   assert.match(callView, /assertRoomAccess/);
   assert.match(callView, /isUsageLimitError/);
   assert.match(callView, /LiveKit usage limit reached/);
-  assert.match(callView, /if \(this\.closed \|\| \(!isUsageLimitError\(error\)/);
   assert.doesNotMatch(callView, /if \(isUsageLimitError\(error\)\) throw error/);
-  assert.match(callView, /const access = await callApi\('token', \{ id: callId, name \}\)[\s\S]*?const access = await directCallToken\(roomName, name\)/);
+  assert.match(callView, /const access = await callApi\('token', \{ id: callId, name \}\)/);
   assert.match(callView, /this\.retryBtn\.hidden = false/);
   assert.doesNotMatch(callView, /this\.hangUp\('disconnected'\)/);
   assert.match(callView, /callServiceLimited/);
@@ -656,6 +828,7 @@ test('compose upload normalizes MIME type and reports storage transport errors w
 test('DM room cleanup RPC is installed and token issuance avoids cleanup management calls', () => {
   const cleanupMigration = readFileSync(new URL('../supabase/migrations/20261127_milkyway_room_cleanup_enqueue_schema_cache.sql', import.meta.url), 'utf8');
   const cleanupRepair = readFileSync(new URL('../supabase/migrations/20261128_milkyway_room_cleanup_enqueue_repair.sql', import.meta.url), 'utf8');
+  const dmRoomsMigration = readFileSync(new URL('../supabase/migrations/20261213_milkyway_dm_livekit_rooms.sql', import.meta.url), 'utf8');
   const repair = readFileSync(new URL('../supabase/milkyway-schema-repair.sql', import.meta.url), 'utf8');
   const callApi = readFileSync(new URL('../api/milkyway-call.js', import.meta.url), 'utf8');
   const livekit = readFileSync(new URL('../api/_lib/livekit.js', import.meta.url), 'utf8');
@@ -665,9 +838,13 @@ test('DM room cleanup RPC is installed and token issuance avoids cleanup managem
   assert.match(cleanupRepair, /create or replace function public\.mw_room_cleanup_enqueue\(p_room_name text\)/i);
   assert.match(cleanupRepair, /notify pgrst, 'reload schema'/i);
   assert.match(repair, /create or replace function public\.mw_room_cleanup_enqueue\(p_room_name text\)/i);
+  assert.match(dmRoomsMigration, /dm-call-\[a-f0-9\]/);
+  assert.match(dmRoomsMigration, /room_users\[1\]::uuid < room_users\[2\]::uuid/);
+  assert.match(repair, /supabase\/migrations\/20261213_milkyway_dm_livekit_rooms\.sql/);
+  assert.match(repair, /room_users\[1\]::uuid < room_users\[2\]::uuid/);
   assert.doesNotMatch(callApi, /retryRoomCleanups/);
   assert.match(callApi, /closeRoom\(ctx, oldRoom, \{ immediate: false \}\)/);
-  assert.match(callApi, /closeRoom\(ctx, `mw-conversation-[\s\S]*?\{ immediate: false \}\)/);
+  assert.match(callApi, /closeRoom\(ctx, dmRoomName\(call\), \{ immediate: false \}\)/);
   assert.match(livekit, /if \(!immediate\) return false/);
 });
 
@@ -743,6 +920,30 @@ test('LIVE guest stage grants publisher permissions and renders allocated guest 
   assert.match(liveControls, /toggleRow\(t\('showGuestSlots'\)/);
   assert.match(liveSession, /adaptiveStream: true,[\s\S]*dynacast: true,[\s\S]*publishDefaults:/);
   assert.match(liveSession, /static warm\(live\)/);
+});
+
+test('LIVE hidden-tab lifecycle rests viewers, keeps audio during grace, and ends inactive hosts', () => {
+  const liveView = readFileSync(new URL('../milkyway/app/ui/live-view.js', import.meta.url), 'utf8');
+  const config = readFileSync(new URL('../milkyway/app/config.js', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../milkyway/app/app.css', import.meta.url), 'utf8');
+  const index = readFileSync(new URL('../milkyway/index.html', import.meta.url), 'utf8');
+  const worker = readFileSync(new URL('../milkyway/sw.js', import.meta.url), 'utf8');
+  assert.match(config, /viewerHiddenGraceMs: 60_000/);
+  assert.match(config, /hostHiddenGraceMs: 60_000/);
+  assert.match(config, /hostIdleGraceMs: 300_000/);
+  assert.match(liveView, /document\.addEventListener\('visibilitychange'/);
+  assert.match(liveView, /window\.addEventListener\('blur'/);
+  assert.match(liveView, /slide\.classList\.add\('resting'\)/);
+  assert.match(liveView, /setTimeout\(\(\) => \{[\s\S]*this\.#leave\(\);[\s\S]*VIEWER_HIDDEN_GRACE_MS/);
+  assert.match(liveView, /HOST_HIDDEN_GRACE_MS/);
+  assert.match(liveView, /HOST_IDLE_GRACE_MS/);
+  assert.match(liveView, /const localLeave = session\.leave\(\);[\s\S]*session\.end\(\)\.catch[\s\S]*endSession\(room\)\.catch[\s\S]*await localLeave/);
+  assert.match(liveView, /removeEventListener\('visibilitychange', onHostVisibility\)/);
+  assert.match(css, /\.live-resting-art svg/);
+  assert.match(css, /--mw-live-rest-image/);
+  assert.match(index, /app\/app\.css\?v=30/);
+  assert.match(worker, /milkyway-v241-guest-view-only/);
+  assert.match(worker, /app\/app\.css\?v=30/);
 });
 
 test('LIVE settings persist guest slots and featured host backgrounds with schema repair', async () => {
@@ -1190,12 +1391,28 @@ test('public Supabase content uses DOM text nodes and validates media URLs', () 
   assert.match(moderation, /textContent/);
 });
 
-test('registration, privacy policy and account deletion request are wired', () => {
+test('registration prompts on protected actions without persistent guest feed buttons', () => {
   const auth = readFileSync(new URL('../milkyway/app/ui/auth-sheet.js', import.meta.url), 'utf8');
+  const shell = readFileSync(new URL('../milkyway/index.html', import.meta.url), 'utf8');
+  const authCss = readFileSync(new URL('../milkyway/app/app.css', import.meta.url), 'utf8');
+  const main = readFileSync(new URL('../milkyway/app/main.js', import.meta.url), 'utf8');
+  const feed = readFileSync(new URL('../milkyway/app/ui/feed-view.js', import.meta.url), 'utf8');
+  const comments = readFileSync(new URL('../milkyway/app/ui/comments-sheet.js', import.meta.url), 'utf8');
   assert.match(auth, /auth\.signUp/);
   assert.match(auth, /emailRedirectTo/);
   assert.match(auth, /passwordMismatch/);
   assert.match(auth, /confirmEmailSent/);
+  assert.match(auth, /auth-field-error/);
+  assert.match(auth, /auth-close/);
+  assert.match(auth, /this\.setMode\(mode === 'signup' \? 'signup' : 'signin'\)/);
+  assert.doesNotMatch(shell, /data-auth-entry|class="auth-entry"/);
+  assert.doesNotMatch(authCss, /\.auth-entry/);
+  assert.match(main, /function showLive\(room = null\) \{\s*if \(!requireLogin\(\)\) return;/);
+  assert.match(main, /if \(target\.id === 'walkieEntry'\) \{\s*if \(requireLogin\(\)\)/);
+  assert.match(main, /nav === 'inbox'.*requireLogin\(\)/);
+  assert.match(main, /else if \(nav === 'me'\) openProfile\(\)/);
+  assert.match(feed, /#like\(post, on\) \{\s*if \(!this\.hooks\.requireLogin\(\)\) return;/);
+  assert.match(comments, /if \(!body \|\| !this\.requireLogin\(\)\) return;/);
   const policy = readFileSync(new URL('../privacy.html', import.meta.url), 'utf8');
   const deletion = readFileSync(new URL('../account-deletion.html', import.meta.url), 'utf8');
   assert.match(policy, /account-deletion\.html/);
@@ -1284,6 +1501,10 @@ test('app checks deployment version without caching and offers refresh for stale
   assert.match(updater, /mw-update-notice/);
   assert.match(worker, /update-check\.js/);
   assert.match(cache, /\['no-store', 'reload', 'no-cache'\]/);
+  assert.match(cache, /async function freshAsset\(event, name\)/);
+  assert.match(cache, /request\.destination === 'script' \|\| request\.destination === 'style'/);
+  assert.match(cache, /fetch\(request, \{ cache: 'reload' \}\)/);
+  assert.match(cache, /if \(saved\)\s*\{\s*keep\(event, refresh\.catch\(\(\) => \{\}\)\);\s*return saved;/);
   assert.match(build, /CF_PAGES_COMMIT_SHA/);
   assert.match(build, /app-version\.json/);
   assert.match(build, /versionedWorker/);
@@ -1359,10 +1580,19 @@ test('Cloudflare build accepts configured Supabase origin and rejects malformed 
 
 test('Cloudflare Pages routes production hosts to the primary custom domain', async () => {
   const wrangler = readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
+  const apiMiddleware = readFileSync(new URL('../functions/api/_middleware.js', import.meta.url), 'utf8');
+  const fetchAdapter = readFileSync(new URL('../api/_lib/fetch-adapter.js', import.meta.url), 'utf8');
+  const supa = readFileSync(new URL('../api/_lib/supa.js', import.meta.url), 'utf8');
   const supabase = readFileSync(new URL('../supabase/config.toml', import.meta.url), 'utf8');
   const homepage = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   const middleware = await import('../functions/_middleware.js');
   assert.match(wrangler, /^name = "milkyway-project"$/m);
+  assert.match(wrangler, /^LIVEKIT_URL = "wss:\/\/masiyatunda-milkyway-live-mgh6b1np\.livekit\.cloud"$/m);
+  assert.match(apiMiddleware, /onRequest = \(\{ request, env \}\)/);
+  assert.match(apiMiddleware, /runApi\(name, request, env\)/);
+  assert.match(fetchAdapter, /runApi\(name, request, environment = null\)/);
+  assert.match(fetchAdapter, /env: environment/);
+  assert.match(supa, /makeContext\(user, token, key, request\.env\)/);
   assert.match(supabase, /site_url = "https:\/\/www\.masiyatunda\.com"/);
   assert.match(supabase, /"https:\/\/milkyway-project\.pages\.dev\/\*\*"/);
   assert.match(homepage, /rel="canonical" href="https:\/\/www\.masiyatunda\.com\/"/);

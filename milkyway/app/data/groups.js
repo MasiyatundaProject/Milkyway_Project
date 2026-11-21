@@ -2,13 +2,28 @@
 import { config } from '../config.js';
 import { api, auth, supabase } from '../core/net.js';
 import { bus } from '../core/events.js';
-import { removeChatMedia, sendViewOnce, uploadChatMedia } from './chat-media.js';
+import {
+  downloadGroupWalkieMedia, removeChatMedia, removeGroupWalkieMedia,
+  sendViewOnce, uploadChatMedia, uploadGroupWalkieMedia,
+} from './chat-media.js';
 
 const endpoint = config.api.groups;
 const listeners = new Set();
 let channel = null;
+const groupChannels = new Map();
 
 const request = (action, options = {}, query = '') => api(`${endpoint}?action=${encodeURIComponent(action)}${query}`, options);
+export function isActiveGroupMember(membership, { userId = auth.userId, createdBy = membership?.created_by } = {}) {
+  const status = String(membership?.join_status || '').toLowerCase();
+  const role = String(membership?.role || '').toLowerCase();
+  return ['active', 'approved'].includes(status)
+    || ['admin', 'owner'].includes(role)
+    || Boolean(userId && membership?.created_by === userId)
+    || Boolean(createdBy && membership?.user_id === createdBy);
+}
+const notify = (subscribers, payload) => subscribers.forEach(listener => {
+  try { listener(payload); } catch (error) { console.error('[groups] message listener failed', error); }
+});
 
 export async function loadGroups() {
   const data = await request('list', { timeout: 12000 });
@@ -57,6 +72,18 @@ export async function leaveGroup(group) {
   return request('leave', { method: 'POST', body: { group } });
 }
 
+export async function deleteGroup(group) {
+  return request('delete', { method: 'POST', body: { group } });
+}
+
+export async function deleteGroupMessage(group, id) {
+  return request('delete-message', { method: 'POST', body: { group, id } });
+}
+
+export async function clearGroupMessages(group) {
+  return request('clear-messages', { method: 'POST', body: { group } });
+}
+
 export async function loadGroupMessages(group) {
   const data = await request('messages', { timeout: 12000 }, `&group=${encodeURIComponent(group)}`);
   return (data?.messages || []).slice().reverse();
@@ -98,10 +125,54 @@ export async function sendGroupMedia(group, { file, noteType = '', viewOnce = fa
   }
 }
 
-export function onGroupMessage(listener) {
-  listeners.add(listener);
-  connect();
-  return () => listeners.delete(listener);
+export async function sendGroupWalkie(group, file) {
+  const id = crypto.randomUUID();
+  const uploaded = await uploadGroupWalkieMedia(group, file, id);
+  try {
+    const data = await request('walkie', {
+      method: 'POST',
+      body: { group, id, storagePath: uploaded.path, mediaType: uploaded.mediaType },
+    });
+    return data?.message;
+  } catch (error) {
+    await removeGroupWalkieMedia(uploaded.path).catch(cleanupError => {
+      console.warn('[walkie] failed to remove unlinked upload', cleanupError);
+    });
+    throw error;
+  }
+}
+
+export async function loadLatestGroupWalkie(group) {
+  const data = await request('walkie-history', { timeout: 12000 }, `&group=${encodeURIComponent(group)}`);
+  return data?.message || null;
+}
+
+export async function downloadGroupWalkie(group, sender, id) {
+  const path = `${group}/${sender}/${id}`;
+  return downloadGroupWalkieMedia(path);
+}
+
+export function onGroupMessage(listener, groupId = '') {
+  if (!groupId) {
+    listeners.add(listener);
+    connect();
+    return () => listeners.delete(listener);
+  }
+  const id = String(groupId);
+  let entry = groupChannels.get(id);
+  if (!entry) {
+    entry = { listeners: new Set(), channel: null, connecting: false };
+    groupChannels.set(id, entry);
+  }
+  entry.listeners.add(listener);
+  connectGroup(id, entry);
+  return () => {
+    entry.listeners.delete(listener);
+    if (entry.listeners.size || groupChannels.get(id) !== entry) return;
+    groupChannels.delete(id);
+    if (entry.channel) removeChannel(entry.channel);
+    entry.channel = null;
+  };
 }
 
 async function connect() {
@@ -113,15 +184,62 @@ async function connect() {
     channel = client.channel(`mw-dm-groups-${me}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'mw_dm_group_messages' }, payload => {
         const message = payload.eventType === 'DELETE' ? payload.old : payload.new;
-        listeners.forEach(listener => { try { listener({ type: payload.eventType, message }); } catch {} });
+        notify(listeners, { type: payload.eventType, message });
       })
       .subscribe();
-  } catch { channel = null; }
+  } catch (error) {
+    channel = null;
+    console.warn('[groups] realtime connection failed', error);
+  }
+}
+
+async function connectGroup(id, entry) {
+  if (entry.channel || entry.connecting || !entry.listeners.size || !auth.signedIn()) return;
+  entry.connecting = true;
+  const me = auth.userId;
+  try {
+    const client = await supabase();
+    if (auth.userId !== me || groupChannels.get(id) !== entry || !entry.listeners.size) return;
+    const scopedChannel = client.channel(`mw-dm-group-walkie-${id}`)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'mw_dm_group_messages',
+        filter: `group_id=eq.${id}`,
+      }, payload => {
+        const message = payload.eventType === 'DELETE' ? payload.old : payload.new;
+        notify(entry.listeners, { type: payload.eventType, message });
+      })
+      .subscribe();
+    entry.channel = scopedChannel;
+  } catch (error) {
+    console.warn('[walkie] group realtime connection failed', error);
+  } finally {
+    entry.connecting = false;
+  }
+}
+
+async function removeChannel(target) {
+  try { await (await supabase()).removeChannel(target); }
+  catch (error) { console.warn('[groups] realtime cleanup failed', error); }
 }
 
 bus.on('auth', async () => {
   const old = channel;
   channel = null;
-  if (old) { try { (await supabase()).removeChannel(old); } catch {} }
-  if (auth.signedIn() && listeners.size) connect();
+  const scoped = [...groupChannels.entries()].map(([id, entry]) => {
+    const oldChannel = entry.channel;
+    entry.channel = null;
+    entry.connecting = false;
+    return [id, entry, oldChannel];
+  });
+  if (old) await removeChannel(old);
+  await Promise.all(scoped.map(([, , oldChannel]) => oldChannel && removeChannel(oldChannel)));
+  if (!auth.signedIn()) {
+    groupChannels.clear();
+    return;
+  }
+  if (listeners.size) connect();
+  scoped.forEach(([id, entry]) => {
+    if (entry.listeners.size) connectGroup(id, entry);
+    else groupChannels.delete(id);
+  });
 });

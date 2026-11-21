@@ -82,7 +82,7 @@ function makeResponse() {
   return { res, state };
 }
 
-export async function runApi(name, request) {
+export async function runApi(name, request, environment = null) {
   const id = getRequestId(request);
   const handler = handlers[name];
   if (!handler) return json(404, { error: 'Not found.', requestId: id }, id);
@@ -113,6 +113,7 @@ export async function runApi(name, request) {
   const { res, state } = makeResponse();
   const req = {
     method: request.method, headers: { ...headers, 'x-request-id': id }, query, body, res, url: url.pathname + url.search,
+    env: environment,
     // Multipart uploads read the raw body as a stream, as with a Node request.
     async *[Symbol.asyncIterator]() { if (raw) for await (const chunk of raw) yield chunk; },
   };

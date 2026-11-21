@@ -5483,6 +5483,268 @@ create policy mw_watch_party_write on realtime.messages
   for insert to authenticated
   with check (public.mw_watch_party_channel_access(realtime.topic(), auth.uid()));
 
+-- ===============================================================================================================
+-- supabase/migrations/20261210_milkyway_group_walkie.sql
+-- ===============================================================================================================
+insert into storage.buckets(id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'mw-group-walkie', 'mw-group-walkie', false, 26214400,
+  array['audio/webm', 'audio/ogg', 'audio/mp4', 'audio/mpeg', 'audio/aac', 'audio/wav']
+)
+on conflict (id) do update set
+  name = excluded.name,
+  public = false,
+  file_size_limit = excluded.file_size_limit,
+  allowed_mime_types = excluded.allowed_mime_types;
+
+drop policy if exists mw_group_walkie_upload on storage.objects;
+create policy mw_group_walkie_upload on storage.objects for insert to authenticated
+  with check (
+    bucket_id = 'mw-group-walkie'
+    and array_length(storage.foldername(name), 1) = 2
+    and (storage.foldername(name))[2] = auth.uid()::text
+    and storage.filename(name) ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    and case
+      when (storage.foldername(name))[1] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      then public.mw_dm_is_group_member(((storage.foldername(name))[1])::uuid, auth.uid())
+      else false
+    end
+  );
+
+drop policy if exists mw_group_walkie_read on storage.objects;
+create policy mw_group_walkie_read on storage.objects for select to authenticated
+  using (
+    bucket_id = 'mw-group-walkie'
+    and array_length(storage.foldername(name), 1) = 2
+    and (storage.foldername(name))[2] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    and storage.filename(name) ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    and case
+      when (storage.foldername(name))[1] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      then public.mw_dm_is_group_member(((storage.foldername(name))[1])::uuid, auth.uid())
+      else false
+    end
+  );
+
+drop policy if exists mw_group_walkie_delete on storage.objects;
+create policy mw_group_walkie_delete on storage.objects for delete to authenticated
+  using (
+    bucket_id = 'mw-group-walkie'
+    and array_length(storage.foldername(name), 1) = 2
+    and (storage.foldername(name))[1] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    and (storage.foldername(name))[2] = auth.uid()::text
+    and storage.filename(name) ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+  );
+
+-- ===============================================================================================================
+-- supabase/migrations/20261211_milkyway_group_approved_owner.sql
+-- ===============================================================================================================
+alter table public.mw_dm_group_members
+  drop constraint if exists mw_dm_group_members_role_check,
+  drop constraint if exists mw_dm_group_members_join_status_check;
+alter table public.mw_dm_group_members
+  add constraint mw_dm_group_members_role_check check (role in ('admin', 'co_admin', 'member', 'owner')),
+  add constraint mw_dm_group_members_join_status_check check (join_status in ('active', 'approved', 'pending', 'invited'));
+
+create or replace function public.mw_dm_is_group_member(gid uuid, uid uuid)
+returns boolean language sql stable security definer set search_path = ''
+as $$
+  select uid = auth.uid() and (
+    exists (
+      select 1 from public.mw_dm_group_members
+      where group_id = gid and user_id = uid
+        and (join_status in ('active', 'approved') or role in ('admin', 'owner'))
+    )
+    or exists (
+      select 1 from public.mw_dm_groups
+      where id = gid and created_by = uid
+    )
+  )
+$$;
+
+create or replace function public.mw_dm_is_group_admin(gid uuid, uid uuid)
+returns boolean language sql stable security definer set search_path = ''
+as $$
+  select uid = auth.uid() and (
+    exists (
+      select 1 from public.mw_dm_group_members
+      where group_id = gid and user_id = uid
+        and (join_status in ('active', 'approved') or role in ('admin', 'co_admin', 'owner'))
+        and role in ('admin', 'co_admin', 'owner')
+    )
+    or exists (
+      select 1 from public.mw_dm_groups
+      where id = gid and created_by = uid
+    )
+  )
+$$;
+
+create or replace function public.mw_group_set_role(p_group uuid, p_user uuid, p_role text)
+returns void language plpgsql security definer set search_path = ''
+as $$
+declare
+  me uuid := auth.uid();
+  creator uuid;
+  target_role text;
+begin
+  if me is null then raise exception 'Sign in first.' using errcode = '28000'; end if;
+  if p_role not in ('admin', 'co_admin', 'member') then raise exception 'Invalid role.' using errcode = '22023'; end if;
+  select created_by into creator from public.mw_dm_groups where id = p_group;
+  if creator is null then raise exception 'Group not found.' using errcode = 'P0002'; end if;
+  select role into target_role from public.mw_dm_group_members
+    where group_id = p_group and user_id = p_user
+      and (join_status in ('active', 'approved') or role in ('admin', 'owner'));
+  if target_role is null then raise exception 'Not an active member.' using errcode = 'P0002'; end if;
+  if p_role in ('admin', 'co_admin') or target_role in ('admin', 'co_admin', 'owner') then
+    if me <> creator then raise exception 'Only the group creator can change administrator roles.' using errcode = '42501'; end if;
+  elsif not public.mw_dm_is_group_admin(p_group, me) then
+    raise exception 'Only admins can change member roles.' using errcode = '42501';
+  end if;
+  if p_user = creator and p_role <> 'admin' then raise exception 'The creator must remain the primary admin.' using errcode = '42501'; end if;
+  update public.mw_dm_group_members set role = p_role where group_id = p_group and user_id = p_user;
+end $$;
+
+create or replace function public.mw_group_leave(p_group uuid)
+returns void language plpgsql security definer set search_path = ''
+as $$
+declare
+  me uuid := auth.uid();
+  was_admin boolean;
+  was_creator boolean;
+  successor uuid;
+begin
+  if me is null then raise exception 'Sign in first.' using errcode = '28000'; end if;
+  select role in ('admin', 'co_admin', 'owner') into was_admin
+    from public.mw_dm_group_members
+    where group_id = p_group and user_id = me
+      and (join_status in ('active', 'approved') or role in ('admin', 'owner'));
+  if was_admin is null then raise exception 'You are not in this group.' using errcode = '42501'; end if;
+  select created_by = me into was_creator from public.mw_dm_groups where id = p_group;
+  delete from public.mw_dm_group_members where group_id = p_group and user_id = me;
+  if was_admin and not exists (
+    select 1 from public.mw_dm_group_members
+    where group_id = p_group and join_status in ('active', 'approved') and role in ('admin', 'owner')
+  ) then
+    select user_id into successor from public.mw_dm_group_members
+      where group_id = p_group and (join_status in ('active', 'approved') or role in ('admin', 'owner'))
+      order by joined_at, user_id limit 1;
+    if successor is not null then
+      update public.mw_dm_group_members set role = 'admin' where group_id = p_group and user_id = successor;
+      if was_creator then
+        update public.mw_dm_groups set created_by = successor where id = p_group;
+      end if;
+    end if;
+  end if;
+  if not exists (
+    select 1 from public.mw_dm_group_members
+    where group_id = p_group and (join_status in ('active', 'approved') or role in ('admin', 'owner'))
+  ) then
+    delete from public.mw_dm_groups where id = p_group;
+  end if;
+end $$;
+
+create or replace function public.mw_group_delete(p_group uuid)
+returns void language plpgsql security definer set search_path = ''
+as $$
+declare
+  me uuid := auth.uid();
+begin
+  if me is null then raise exception 'Sign in first.' using errcode = '28000'; end if;
+  if not exists (
+    select 1 from public.mw_dm_groups
+    where id = p_group and created_by = me
+  ) and not exists (
+    select 1 from public.mw_dm_group_members
+    where group_id = p_group and user_id = me
+      and role in ('admin', 'owner')
+      and (join_status in ('active', 'approved') or role in ('admin', 'owner'))
+  ) then
+    raise exception 'Only group admins or the creator can delete the group.' using errcode = '42501';
+  end if;
+  delete from public.mw_dm_groups where id = p_group;
+end $$;
+
+-- ===============================================================================================================
+-- supabase/migrations/20261212_milkyway_group_message_moderation.sql
+-- ===============================================================================================================
+drop policy if exists mw_dm_group_messages_delete on public.mw_dm_group_messages;
+create policy mw_dm_group_messages_delete on public.mw_dm_group_messages
+  for delete to authenticated
+  using (
+    sender_id = auth.uid()
+    or public.mw_dm_is_group_admin(group_id, auth.uid())
+  );
+
+create or replace function public.mw_group_delete(p_group uuid)
+returns void language plpgsql security definer set search_path = ''
+as $$
+declare me uuid := auth.uid();
+begin
+  if me is null then raise exception 'Sign in first.' using errcode = '28000'; end if;
+  if not exists (
+    select 1 from public.mw_dm_groups
+    where id = p_group and created_by = me
+  ) and not exists (
+    select 1 from public.mw_dm_group_members
+    where group_id = p_group and user_id = me
+      and role in ('admin', 'co_admin', 'owner')
+      and (join_status in ('active', 'approved') or role in ('admin', 'co_admin', 'owner'))
+  ) then
+    raise exception 'Only group admins or the creator can delete the group.' using errcode = '42501';
+  end if;
+  delete from public.mw_dm_groups where id = p_group;
+end $$;
+
+-- ===============================================================================================================
+-- supabase/migrations/20261213_milkyway_dm_livekit_rooms.sql
+-- ===============================================================================================================
+create or replace function public.mw_room_cleanup_enqueue(p_room_name text)
+returns void
+language plpgsql security definer set search_path = ''
+as $$
+declare
+  me uuid := auth.uid();
+  owner_allowed boolean := false;
+  call_id uuid;
+  room_users text[];
+begin
+  if me is null then raise exception 'Sign in first.' using errcode = '28000'; end if;
+  if p_room_name ~* '^mw-(audio|video)-live-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$' then
+    select exists (
+      select 1 from public.mw_video_live_sessions
+      where room_name = p_room_name and host_id = me
+    ) into owner_allowed;
+  elsif p_room_name ~* '^mw-conversation-(audio|video)-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$' then
+    call_id := substring(p_room_name from '([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$')::uuid;
+    select exists (
+      select 1 from public.mw_dm_calls
+      where id = call_id and (caller_id = me or callee_id = me)
+    ) into owner_allowed;
+  elsif p_room_name ~* '^dm-call-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$' then
+    room_users := regexp_match(
+      p_room_name,
+      '^dm-call-([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})-([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$',
+      'i'
+    );
+    select room_users[1]::uuid < room_users[2]::uuid and exists (
+      select 1 from public.mw_dm_calls
+      where (
+        (caller_id = room_users[1]::uuid and callee_id = room_users[2]::uuid)
+        or (caller_id = room_users[2]::uuid and callee_id = room_users[1]::uuid)
+      )
+      and (caller_id = me or callee_id = me)
+    ) into owner_allowed;
+  end if;
+  if not owner_allowed then raise exception 'Not allowed to close this room.' using errcode = '42501'; end if;
+  insert into public.mw_room_cleanup_queue(room_name, requested_by)
+    values (p_room_name, me)
+    on conflict (room_name) do update set
+      requested_by = excluded.requested_by,
+      requested_at = now(), next_attempt_at = now(), lease_id = null, lease_until = null, last_error = '';
+end
+$$;
+revoke all on function public.mw_room_cleanup_enqueue(text) from public, anon;
+grant execute on function public.mw_room_cleanup_enqueue(text) to authenticated;
+
 -- ---------------------------------------------------------------------------------------------------------------
 -- 5. Final hardening and cleanup
 -- ---------------------------------------------------------------------------------------------------------------

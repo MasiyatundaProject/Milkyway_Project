@@ -7,13 +7,14 @@ import { profiles } from '../data/profiles.js';
 import { presence } from '../data/presence.js';
 import { loadThread, sendMessage, sendOneViewText, sendDirectMedia, markRead, onMessage, deleteForMe, searchPeople } from '../data/messages.js';
 import { consumeViewOnce } from '../data/chat-media.js';
-import { discoverGroups, joinGroup, loadGroups } from '../data/groups.js';
+import { deleteGroup, discoverGroups, isActiveGroupMember, joinGroup, loadGroups } from '../data/groups.js';
 import { Sheet } from './sheet.js';
 import { h, icon, ago, avatar, formatDateTime, toast } from './dom.js';
 import { calls } from './call-view.js';
 import { GroupChatSheet, GroupCreateSheet, joinAndOpenGroup } from './group-view.js';
 import { ChatComposer, mediaMessageContent } from './chat-composer.js';
 import { WatchParty, watchableUrl } from './watch-party.js';
+import { bindLongPress } from './long-press.js';
 
 const phoneIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1L6.6 10.8z"/></svg>';
 const backIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.4 4.6 14 3.2 5.2 12l8.8 8.8 1.4-1.4L8 12z"/></svg>';
@@ -32,6 +33,8 @@ export class InboxView {
     this.active = h('p', { class: 'muted inbox-active' });
     this.list = h('div', { class: 'chat-list' });
     this.groupList = h('div', { class: 'chat-list' });
+    this.groups = [];
+    this.groupActions = new Sheet({ title: t('groupActions'), className: 'group-manage-sheet', autoFocus: false });
     this.groupSection = h('section', { class: 'inbox-group-section' }, h('h3', { class: 'group-section-title' }, t('groups')), this.groupList);
     this.discoverBox = h('div', { class: 'inbox-group-discovery', hidden: true });
     this.searchBox = h('div', { class: 'stack', hidden: true });
@@ -44,7 +47,10 @@ export class InboxView {
           h('button', { class: 'pill-btn hot', type: 'button', onclick: () => this.#toggleSearch() }, h('span', { html: icon.plus }), t('newChat')))),
       this.searchBox, this.discoverBox, this.groupSection, this.list);
     this.chat = new ChatSheet();
-    this.groupChat = new GroupChatSheet({ onChanged: () => this.#loadGroups() });
+    this.groupChat = new GroupChatSheet({
+      onChanged: () => this.#loadGroups(),
+      onDeleted: groupId => this.#removeGroupLocally(groupId),
+    });
     this.createGroup = new GroupCreateSheet(group => {
       this.#loadGroups();
       if (group?.id) this.groupChat.open(group);
@@ -66,25 +72,39 @@ export class InboxView {
   async #loadGroups() {
     try {
       const groups = await loadGroups();
-      this.groupList.replaceChildren(...(groups.length ? groups.map(group => this.#groupRow(group)) : [h('p', { class: 'muted center' }, t('noGroups'))]));
+      this.groups = groups;
+      this.#renderGroups();
     } catch (error) {
       this.groupList.replaceChildren(h('p', { class: 'muted center' }, error?.message || t('retry')));
     }
+  }
+
+  #renderGroups() {
+    this.groupList.replaceChildren(...(this.groups.length
+      ? this.groups.map(group => this.#groupRow(group))
+      : [h('p', { class: 'muted center' }, t('noGroups'))]));
+  }
+
+  #removeGroupLocally(groupId) {
+    this.groups = this.groups.filter(group => group.id !== groupId);
+    this.#renderGroups();
   }
 
   #groupRow(group) {
     const face = group.avatar_url
       ? h('img', { class: 'group-list-avatar', src: group.avatar_url, alt: '', loading: 'lazy' })
       : h('span', { class: 'group-list-avatar group-list-placeholder' }, '👥');
+    const active = isActiveGroupMember(group);
+    const pending = !active && group.join_status === 'pending';
     let statusAction;
-    if (group.join_status === 'active') {
+    if (active) {
       statusAction = () => this.groupChat.open(group);
     } else if (group.join_status === 'invited') {
       statusAction = () => joinAndOpenGroup(group, joined => { this.#loadGroups(); this.groupChat.open(joined); }, () => this.#loadGroups());
     }
-    const actionLabel = group.join_status === 'pending' ? t('requestPending')
+    const actionLabel = pending ? t('requestPending')
       : group.join_status === 'invited' ? t('acceptInvite') : t('openChat');
-    return h('div', { class: `group-list-row${group.join_status === 'pending' ? ' pending' : ''}` },
+    const row = h('div', { class: `group-list-row${pending ? ' pending' : ''}`, 'data-group-id': group.id },
       statusAction
         ? h('button', { class: 'group-list-open', type: 'button', onclick: statusAction }, face,
           h('span', { class: 'chat-text' }, h('b', {}, group.name), h('small', { class: 'muted' }, `${group.caption || t(`joinModeLabel_${group.join_mode}`)}`)))
@@ -92,6 +112,50 @@ export class InboxView {
           h('span', { class: 'chat-text' }, h('b', {}, group.name), h('small', { class: 'muted' }, t('requestPending')))),
       statusAction ? h('button', { class: 'pill-btn group-row-action', type: 'button', onclick: statusAction }, actionLabel)
         : h('span', { class: 'muted group-row-action' }, actionLabel));
+    if (this.#canManageGroup(group)) bindLongPress(row, () => this.#openGroupActions(group));
+    return row;
+  }
+
+  #canManageGroup(group) {
+    return group.created_by === auth.userId
+      || ['admin', 'co_admin', 'owner'].includes(String(group.role || '').toLowerCase());
+  }
+
+  #openGroupActions(group) {
+    if (!this.#canManageGroup(group)) return;
+    this.groupActions.title = group.name || t('groupActions');
+    const manage = h('button', {
+      class: 'pill-btn', type: 'button',
+      onclick: () => {
+        this.groupActions.close();
+        this.groupChat.manager.open(group);
+      },
+    }, t('manageGroup'));
+    const remove = h('button', {
+      class: 'pill-btn danger', type: 'button',
+      onclick: () => this.#deleteGroupFromList(group),
+    }, t('deleteGroup'));
+    this.groupActions.body.replaceChildren(
+      ...(this.#canManageGroup(group) ? [manage] : []),
+      remove,
+      h('button', { class: 'pill-btn', type: 'button', onclick: () => this.groupActions.close() }, t('cancel')));
+    this.groupActions.open();
+  }
+
+  async #deleteGroupFromList(group) {
+    if (!confirm(`${t('deleteGroup')}?`)) return;
+    const previous = this.groups;
+    this.groups = previous.filter(item => item.id !== group.id);
+    this.#renderGroups();
+    this.groupActions.close();
+    try {
+      await deleteGroup(group.id);
+      this.groupChat.onChanged?.();
+    } catch (error) {
+      this.groups = previous;
+      this.#renderGroups();
+      toast(error?.message || t('groupActionFailed'));
+    }
   }
 
   #toggleDiscover() {

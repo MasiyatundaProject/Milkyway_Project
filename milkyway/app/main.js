@@ -119,6 +119,7 @@ function showHome() {
   feedView.focus();
 }
 function showLive(room = null) {
+  if (!requireLogin()) return;
   playback.suspend(true);
   $('feedView').hidden = true;
   $('exploreView').hidden = true;
