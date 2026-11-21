@@ -492,6 +492,7 @@ export const calls = {
       if (!call || call.status !== 'ringing' || call.callee_id !== auth.userId || calls.active) return;
       if (Date.now() - Date.parse(call.created_at) > RING_MS) return;
       calls.active = new CallScreen({ call, peer: call.caller_id, callType: callTypeOf(call), incoming: true });
+      bus.emit('notifications-refresh');
     } catch {}
   },
 

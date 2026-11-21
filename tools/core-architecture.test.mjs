@@ -403,6 +403,42 @@ test('creator service cache repair and push delivery cover post and incoming-cal
   assert.match(repair, /mw_push_delivery_relay/);
 });
 
+test('notification activity supports legacy LIVE alerts and badges direct and group DM activity', () => {
+  const api = readFileSync(new URL('../api/milkyway-notifications.js', import.meta.url), 'utf8');
+  const migration = readFileSync(new URL('../supabase/migrations/20261215_milkyway_notification_read_state.sql', import.meta.url), 'utf8');
+  const repair = readFileSync(new URL('../supabase/milkyway-schema-repair.sql', import.meta.url), 'utf8');
+  const view = readFileSync(new URL('../milkyway/app/ui/notifications-view.js', import.meta.url), 'utf8');
+  const main = readFileSync(new URL('../milkyway/app/main.js', import.meta.url), 'utf8');
+  const groups = readFileSync(new URL('../milkyway/app/data/groups.js', import.meta.url), 'utf8');
+  const groupView = readFileSync(new URL('../milkyway/app/ui/group-view.js', import.meta.url), 'utf8');
+  const shell = readFileSync(new URL('../milkyway/index.html', import.meta.url), 'utf8');
+  const styles = readFileSync(new URL('../milkyway/app/app.css', import.meta.url), 'utf8');
+  assert.doesNotMatch(api, /mw_live_alerts[^`\n]*select=id/i);
+  assert.match(api, /select=room_name,host_id,host_name,title,created_at,read_at/);
+  assert.match(api, /select=room,host_id,host_name,title,created_at,read_at/);
+  assert.match(api, /room=in\.\(\$\{list\}\)/);
+  assert.match(api, /mw_post_notifications\?recipient_id=/);
+  assert.match(api, /loadUnreadMessages/);
+  assert.match(api, /loadUnreadGroupMessages/);
+  assert.match(api, /loadCallAlerts/);
+  assert.match(api, /dmUnread: \{ \.\.\.dmUnread, total:/);
+  assert.match(migration, /add column if not exists read_at timestamptz/);
+  assert.match(migration, /add column if not exists last_read_at timestamptz/);
+  assert.match(migration, /mw_dm_group_mark_read/);
+  assert.match(migration, /mw_dm_call_notification_read/);
+  assert.match(repair, /20261215_milkyway_notification_read_state\.sql/);
+  assert.match(view, /onOpenCall/);
+  assert.match(view, /onOpenGroup/);
+  assert.match(view, /onOpenPost/);
+  assert.match(view, /publishedNewPost/);
+  assert.match(main, /onDmUnread = count/);
+  assert.match(main, /notifications-refresh/);
+  assert.match(groups, /request\('mark-read'/);
+  assert.match(groupView, /markGroupRead\(groupId\)/);
+  assert.match(shell, /id="dmUnread"/);
+  assert.match(styles, /\.dm-unread/);
+});
+
 function fakeSupabase(routes) {
   const calls = [];
   globalThis.fetch = async url => {

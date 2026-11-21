@@ -3,45 +3,47 @@ import { t } from '../core/i18n.js';
 import { enableNotifications, notificationPermission } from '../core/push.js';
 import { playMessageAlert } from '../core/notification-sound.js';
 import { api } from '../core/net.js';
-import { inbox } from '../data/chats.js';
 import { Sheet } from './sheet.js';
 import { h, ago, toast } from './dom.js';
 
+const icons = { live: '🔴', post: '✦', message: '✉', group: '👥', call: '☎' };
+
 export class NotificationsView {
-  constructor({ onOpenLive, onOpenMessage } = {}) {
+  constructor({ onOpenLive, onOpenMessage, onOpenGroup, onOpenCall, onOpenPost } = {}) {
     this.onOpenLive = onOpenLive;
     this.onOpenMessage = onOpenMessage;
+    this.onOpenGroup = onOpenGroup;
+    this.onOpenCall = onOpenCall;
+    this.onOpenPost = onOpenPost;
     this.onUnread = null;
-    this.rooms = [];
+    this.onDmUnread = null;
     this.alerts = [];
     this.sheet = new Sheet({ title: t('notifications'), className: 'notifications-sheet', autoFocus: false });
     this.body = h('div', { class: 'stack notifications-list' });
     this.sheet.body.append(this.body);
-    inbox.subscribe(rooms => this.#paintUnread(rooms));
   }
 
   open() {
     this.sheet.open();
-    inbox.refresh();
-    void this.#load();
+    void this.refresh();
   }
 
   preload() {
-    inbox.refresh();
-    void this.#load();
+    void this.refresh();
   }
 
-  #paintUnread(rooms = []) {
-    this.rooms = rooms || [];
-    const messages = this.rooms.filter(room => room.unread).length;
-    this.unreadMessages = messages;
-    this.onUnread?.(messages + (this.unreadAlerts || 0));
-    this.#render();
+  refresh() {
+    return this.#load();
   }
 
   async #load() {
-    this.loaded = false;
-    this.body.replaceChildren(h('p', { class: 'muted center' }, t('loading')));
+    const token = (this.loadToken || 0) + 1;
+    this.loadToken = token;
+    const hadLoaded = this.loaded;
+    if (!hadLoaded) {
+      this.loaded = false;
+      this.body.replaceChildren(h('p', { class: 'muted center' }, t('loading')));
+    }
     const permissionRow = h('button', {
       class: 'nova-row',
       type: 'button',
@@ -79,60 +81,84 @@ export class NotificationsView {
       console.warn('[notifications] Permission status could not be read.', error);
     }
 
-    let alerts = [];
     try {
-      const result = await api(`${config.api.base}/milkyway-notifications?action=alerts`, { timeout: 10000 });
-      alerts = Array.isArray(result?.alerts) ? result.alerts : [];
-      this.unreadAlerts = Number(result?.unread) || 0;
-      this.onUnread?.(this.unreadMessages + this.unreadAlerts);
+      const result = await api(`${config.api.base}/milkyway-notifications?action=alerts`, { timeout: 15000 });
+      if (token !== this.loadToken) return;
+      this.alerts = Array.isArray(result?.alerts) ? result.alerts : [];
+      this.onUnread?.(Number(result?.unread) || 0);
+      this.onDmUnread?.(Number(result?.dmUnread?.total) || 0);
     } catch (error) {
-      this.body.replaceChildren(permissionRow, testSound, h('p', { class: 'muted center', role: 'status' }, error?.message || t('retry')));
+      if (token !== this.loadToken) return;
+      if (hadLoaded) console.warn('[notifications] Could not refresh activity.', error);
+      else this.body.replaceChildren(permissionRow, testSound, h('p', { class: 'muted center', role: 'status' }, error?.message || t('retry')));
       return;
     }
 
     this.permissionRow = permissionRow;
     this.testSound = testSound;
-    this.alerts = alerts;
     this.loaded = true;
     this.#render();
   }
 
+  async #markRead(alert) {
+    const body = {};
+    if (alert.type === 'live') body.rooms = [alert.room];
+    if (alert.type === 'post') body.postIds = [alert.notificationId];
+    if (alert.type === 'call') body.callIds = [alert.callId];
+    if (!Object.keys(body).length) return;
+    try {
+      await api(`${config.api.base}/milkyway-notifications?action=read`, {
+        method: 'POST', body, timeout: 10000,
+      });
+      alert.read = true;
+      void this.refresh();
+    } catch (error) {
+      console.warn('[notifications] Could not mark notification as read.', error);
+      toast(error?.message || t('retry'));
+    }
+  }
+
+  #open(alert) {
+    this.sheet.close();
+    if (!alert.read) void this.#markRead(alert);
+    if (alert.type === 'live') this.onOpenLive?.(alert.room);
+    else if (alert.type === 'post') this.onOpenPost?.(alert.postId);
+    else if (alert.type === 'message') this.onOpenMessage?.(alert.peerId);
+    else if (alert.type === 'group') this.onOpenGroup?.(alert.groupId);
+    else if (alert.type === 'call') this.onOpenCall?.(alert.callId, alert.status, alert.callerId);
+  }
+
   #render() {
     if (!this.loaded) return;
-    const messages = this.rooms.filter(room => room.unread).map(room => h('button', {
-      class: 'nova-row notification-item unread',
-      type: 'button',
-      onclick: () => {
-        this.sheet.close();
-        this.onOpenMessage?.(room.peer);
+    const items = this.alerts.map(alert => {
+      const title = alert.type === 'call'
+        ? `${alert.title} · ${t(alert.status === 'incoming' ? 'incomingCall' : 'missedCall')}`
+        : alert.type === 'message'
+          ? `${alert.title} · ${alert.count} ${t('unreadMessages')}`
+          : alert.type === 'group'
+            ? `${alert.title} · ${alert.count} ${t('unreadMessages')}`
+            : alert.type === 'post'
+              ? `${alert.title} · ${t('publishedNewPost')}`
+              : alert.title || `${alert.hostName || 'MilkyWay'} · ${t('live')}`;
+      const detail = alert.type === 'post' ? alert.caption
+        : alert.type === 'message' ? t('inbox')
+          : alert.type === 'group' ? t('groupChat')
+            : alert.type === 'call' ? alert.status === 'incoming' ? t('incomingCall') : t('missedCall')
+              : ago(alert.createdAt);
+      return h('button', {
+        class: `nova-row notification-item${alert.read ? '' : ' unread'}`,
+        type: 'button',
+        onclick: () => this.#open(alert),
       },
-    },
-    h('span', { class: 'nova-row-icon', 'aria-hidden': 'true' }, '✉'),
-    h('span', { class: 'nova-row-label' }, room.name || 'MilkyWay'),
-    h('small', { class: 'muted nova-row-detail' }, room.preview || t('inbox'))));
-    const alerts = this.alerts.map(alert => h('button', {
-      class: `nova-row notification-item${alert.read ? '' : ' unread'}`,
-      type: 'button',
-      onclick: () => {
-        this.sheet.close();
-        if (!alert.read) {
-          api(`${config.api.base}/milkyway-notifications?action=read`, {
-            method: 'POST', body: { rooms: [alert.room] }, timeout: 10000,
-          }).catch(error => console.warn('[notifications] Could not mark alert as read.', error));
-        }
-        this.onOpenLive?.(alert.room);
-      },
-    },
-    h('span', { class: 'nova-row-icon', 'aria-hidden': 'true' }, '🔴'),
-    h('span', { class: 'nova-row-label' }, alert.title || `${alert.hostName || 'MilkyWay'} · ${t('live')}`),
-    h('small', { class: 'muted nova-row-detail' }, ago(alert.createdAt))));
-    const rows = [
+      h('span', { class: 'nova-row-icon', 'aria-hidden': 'true' }, icons[alert.type] || '•'),
+      h('span', { class: 'nova-row-label' }, title),
+      h('small', { class: 'muted nova-row-detail' }, detail || ago(alert.createdAt)));
+    });
+    this.body.replaceChildren(
       this.permissionRow,
       this.testSound,
-      ...(messages.length ? [h('p', { class: 'nova-section' }, t('inbox')), ...messages] : []),
       h('p', { class: 'nova-section' }, t('recentNotifications')),
-      ...(alerts.length ? alerts : messages.length ? [] : [h('p', { class: 'muted center', role: 'status' }, t('noNotifications'))]),
-    ];
-    this.body.replaceChildren(...rows);
+      ...(items.length ? items : [h('p', { class: 'muted center', role: 'status' }, t('noNotifications'))]),
+    );
   }
 }

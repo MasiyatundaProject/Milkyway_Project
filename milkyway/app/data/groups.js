@@ -40,6 +40,12 @@ export async function loadGroup(id) {
   return request('group', { timeout: 12000 }, `&id=${encodeURIComponent(id)}`);
 }
 
+export async function markGroupRead(group) {
+  const result = await request('mark-read', { method: 'POST', body: { group } });
+  bus.emit('notifications-refresh');
+  return result;
+}
+
 export async function createGroup(options) {
   return request('create', { method: 'POST', body: options });
 }

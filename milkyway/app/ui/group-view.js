@@ -4,7 +4,7 @@ import { profiles } from '../data/profiles.js';
 import { searchPeople } from '../data/messages.js';
 import {
   addGroupMembers, clearGroupMessages, createGroup, decideGroupRequest, deleteGroup, deleteGroupMessage,
-  isActiveGroupMember, joinGroup, leaveGroup, loadGroup, loadGroupMessages, onGroupMessage, removeGroupMember,
+  isActiveGroupMember, joinGroup, leaveGroup, loadGroup, loadGroupMessages, markGroupRead, onGroupMessage, removeGroupMember,
   sendGroupMedia, sendGroupMessage, sendGroupOneViewText, setGroupRole, updateGroup,
 } from '../data/groups.js';
 import { consumeViewOnce } from '../data/chat-media.js';
@@ -131,6 +131,8 @@ export class GroupChatSheet {
       const [details, rows] = await Promise.all([loadGroup(groupId), loadGroupMessages(groupId)]);
       if (this.group?.id !== groupId) return;
       this.group = { ...group, ...details.group };
+      await markGroupRead(groupId);
+      if (this.group?.id !== groupId) return;
       const activeMembers = (details.members || []).filter(member => isActiveGroupMember(member, { createdBy: this.group.created_by }));
       await profiles.many(activeMembers.map(member => member.user_id));
       this.subtitle.textContent = `${activeMembers.length} ${t('groupMembers').toLowerCase()}`;
@@ -286,6 +288,10 @@ export class GroupChatSheet {
       this.messages.set(message.id, message);
     }
     this.#render();
+    if (type === 'INSERT' && message.sender_id !== auth.userId && this.sheet.isOpen
+      && document.visibilityState === 'visible') {
+      markGroupRead(this.group.id).catch(error => console.warn('[groups] Read state could not be updated.', error));
+    }
   }
 }
 

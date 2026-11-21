@@ -84,7 +84,7 @@ export function markRead(peer) {
   if (!auth.userId || !UUID.test(peer)) return Promise.resolve();
   return rest(`mw_messages?sender_id=eq.${peer}&receiver_id=eq.${auth.userId}&read_at=is.null`, {
     method: 'PATCH', body: { read_at: new Date().toISOString() },
-  }).catch(() => {});
+  }).then(result => { bus.emit('notifications-refresh'); return result; }).catch(() => {});
 }
 
 export async function deleteForMe(id) {
@@ -107,6 +107,7 @@ async function connect() {
     const emit = payload => {
       const message = payload.eventType === 'DELETE' ? payload.old : payload.new;
       listeners.forEach(fn => { try { fn({ type: payload.eventType, message }); } catch {} });
+      if (payload.eventType === 'INSERT') bus.emit('notifications-refresh');
       if (payload.eventType === 'INSERT') inbox.refresh();
     };
     channel = sb.channel(`mw-dm-${me}`)

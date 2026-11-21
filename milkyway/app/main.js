@@ -36,6 +36,11 @@ const inboxView = lazy(() => import('./ui/inbox-view.js').then(m => new m.InboxV
 const notificationsView = lazy(() => import('./ui/notifications-view.js').then(m => new m.NotificationsView({
   onOpenLive: room => showLive(room),
   onOpenMessage: peerId => openDirectMessage(peerId),
+  onOpenGroup: groupId => inboxView().then(view => view.openGroup(groupId)),
+  onOpenCall: (callId, status, callerId) => status === 'missed'
+    ? openDirectMessage(callerId)
+    : callView().then(calls => calls.handleNotification(callId)),
+  onOpenPost: postId => fetchSharedPost(postId).then(openPost).catch(error => toast(error?.message || t('imageUnavailable'))),
 })));
 const walkieTalkieView = lazy(() => import('./ui/walkie-talkie.js').then(m => new m.WalkieTalkieView()));
 const callView = lazy(() => import('./ui/call-view.js').then(m => m.calls));
@@ -292,12 +297,23 @@ async function syncPendingOAuthUsername() {
 }
 bus.on('auth', () => {
   shell.toggleAttribute('data-signed-in', auth.signedIn());
+  if (!auth.signedIn()) {
+    $('notificationUnread')?.setAttribute('hidden', '');
+    $('notificationUnread')?.classList.remove('has-count');
+    $('notificationUnread').textContent = '';
+    $('dmUnread')?.setAttribute('hidden', '');
+    $('dmUnread').textContent = '';
+    $('notificationsButton')?.setAttribute('aria-label', t('notifications'));
+    document.querySelector('[data-nav="inbox"]')?.setAttribute('aria-label', t('inbox'));
+  }
   if (!auth.signedIn() && scope === 'following') scope = 'foryou';
   feedView.scope = null;
   setScope(scope);
   if (auth.signedIn()) {
     syncPendingOAuthUsername();
     startSignedIn();
+    notificationsView().then(view => view.refresh())
+      .catch(error => console.warn('[notifications] unread state could not be refreshed', error));
     openDirectMessageFromUrl(new URL(location.href));
   }
 });
@@ -331,8 +347,18 @@ function startSignedIn() {
       badge.textContent = count > 99 ? '99+' : count > 0 ? String(count) : '';
       $('notificationsButton')?.setAttribute('aria-label', `${t('notifications')}${count ? `, ${count} ${t('unread')}` : ''}`);
     };
+    view.onDmUnread = count => {
+      const badge = $('dmUnread');
+      if (!badge) return;
+      badge.hidden = count < 1;
+      badge.textContent = count > 99 ? '99+' : count > 0 ? String(count) : '';
+      document.querySelector('[data-nav="inbox"]')?.setAttribute('aria-label', `${t('inbox')}${count ? `, ${count} ${t('unread')}` : ''}`);
+    };
     view.preload();
   }).catch(error => console.warn('[notifications] unread state could not be loaded', error));
+  import('./data/groups.js').then(({ onGroupMessage }) => onGroupMessage(({ type, message }) => {
+    if (type === 'INSERT' && message?.sender_id !== auth.userId) bus.emit('notifications-refresh');
+  })).catch(error => console.warn('[notifications] group message listener could not be started', error));
   import('./data/messages.js').then(({ onMessage, isForegroundConversation }) => {
     onMessage(({ type, message }) => {
       if (type !== 'INSERT' || message?.receiver_id !== auth.userId || message.sender_id === auth.userId
@@ -344,6 +370,21 @@ function startSignedIn() {
     });
   }).catch(error => console.warn('[notifications] DM realtime listener could not be started', error));
 }
+
+let notificationRefreshTimer = null;
+bus.on('notifications-refresh', () => {
+  clearTimeout(notificationRefreshTimer);
+  notificationRefreshTimer = setTimeout(() => {
+    if (auth.signedIn()) notificationsView().then(view => view.refresh())
+      .catch(error => console.warn('[notifications] unread state could not be refreshed', error));
+  }, 180);
+});
+setInterval(() => {
+  if (auth.signedIn() && document.visibilityState === 'visible') {
+    notificationsView().then(view => view.refresh())
+      .catch(error => console.warn('[notifications] unread state could not be refreshed', error));
+  }
+}, 30000);
 
 idle(() => {
   syncPendingOAuthUsername();

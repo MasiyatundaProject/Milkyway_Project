@@ -128,6 +128,12 @@ export default route({
     };
   },
 
+  'mark-read': async ({ ctx, body, query, method }) => {
+    if (method !== 'POST') throw new ApiError(405, 'Method not allowed.');
+    await ctx.rpc('mw_dm_group_mark_read', { p_group: groupId(body, query) });
+    return { ok: true };
+  },
+
   create: async ({ ctx, body }) => {
     const id = await ctx.rpc('mw_group_create_advanced', {
       p_name: groupName(body.name),

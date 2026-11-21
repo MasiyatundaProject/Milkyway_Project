@@ -32,6 +32,7 @@ async function sync() {
       if (recipient !== currentRecipient || !notice?.post_id) return;
       const author = String(notice.actor_name || 'MilkyWay').slice(0, 80);
       toast(`${author} ${t('publishedNewPost')}`);
+      bus.emit('notifications-refresh');
     })
     .subscribe(status => {
       if (['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'].includes(status)) {

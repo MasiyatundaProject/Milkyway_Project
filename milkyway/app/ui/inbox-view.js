@@ -69,6 +69,12 @@ export class InboxView {
     this.sheet.open();
   }
 
+  openGroup(groupId) {
+    if (!groupId) return;
+    this.sheet.open();
+    this.groupChat.open({ id: groupId });
+  }
+
   async #loadGroups() {
     try {
       const groups = await loadGroups();
