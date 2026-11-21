@@ -4,6 +4,8 @@ import { config } from '../config.js';
 import { t, lang, languages, setLanguage } from '../core/i18n.js';
 import { api, auth, supabase } from '../core/net.js';
 import { bus } from '../core/events.js';
+import { enableNotifications, notificationPermission } from '../core/push.js';
+import { testIncomingRingtone } from '../core/ringtone.js';
 import { openFilePicker } from '../core/media-files.js';
 import { presence } from '../data/presence.js';
 import { catalog, wallet } from '../data/gifts.js';
@@ -314,10 +316,47 @@ export class NovaMenu {
       input.addEventListener('change', () => save({ allowMessages: value }));
       return h('label', {}, input, h('span', {}, value === 'everyone' ? t('everyone') : value === 'followers' ? t('followersOnly') : t('nobody')));
     }));
+    const notificationRow = row('🔔', t('enableNotifications'), {
+      detail: t('loading'),
+      onclick: async () => {
+        notificationRow.disabled = true;
+        try {
+          const permission = await enableNotifications();
+          notificationRow.detail.textContent = t(`notificationPermission_${permission}`);
+        } catch (error) {
+          notificationRow.detail.textContent = error?.message || t('notificationSetupFailed');
+          console.warn('[push] Notification setup failed.', error);
+        } finally {
+          notificationRow.disabled = false;
+        }
+      },
+    });
+    const soundRow = row('🔊', t('testRingtone'), {
+      detail: t('soundTestHint'),
+      onclick: async () => {
+        soundRow.disabled = true;
+        try {
+          toast(await testIncomingRingtone() ? t('soundTestPlayed') : t('soundTestBlocked'));
+        } catch (error) {
+          console.warn('[call] Ringtone test failed.', error);
+          toast(error?.message || t('soundTestBlocked'));
+        } finally {
+          soundRow.disabled = false;
+        }
+      },
+    });
+    try {
+      notificationRow.detail.textContent = t(`notificationPermission_${await notificationPermission()}`);
+    } catch (error) {
+      notificationRow.detail.textContent = error?.message || t('notificationSetupFailed');
+      console.warn('[push] Notification permission could not be checked.', error);
+    }
     box.replaceChildren(
       toggle(t('privateAccount'), prefs.isPrivate, (on, input) => save({ isPrivate: on }, input), t('privateAccountHint')),
       h('p', { class: 'nova-section' }, t('whoCanMessage')), messages,
       h('p', { class: 'nova-section' }, t('notifications')),
+      notificationRow,
+      soundRow,
       toggle(t('notifyFollow'), prefs.notifyFollow !== false, (on, input) => save({ notifyFollow: on }, input)),
       toggle(t('notifyEcho'), prefs.notifyEcho !== false, (on, input) => save({ notifyEcho: on }, input)),
       toggle(t('notifySignal'), prefs.notifySignal !== false, (on, input) => save({ notifySignal: on }, input)),

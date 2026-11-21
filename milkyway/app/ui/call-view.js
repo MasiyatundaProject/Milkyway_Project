@@ -97,8 +97,17 @@ class CallScreen {
         gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.65);
       };
       ring();
+      this.ringtoneRing = ring;
       this.ringtoneTimer = setInterval(ring, 1600);
-      if (context.state === 'suspended') context.resume().catch(error => console.warn('[call] ringtone playback blocked', error));
+      if (context.state === 'suspended') {
+        this.ringtoneHelpBtn.hidden = false;
+        context.resume().then(() => {
+          if (context.state === 'running') this.ringtoneHelpBtn.hidden = true;
+        }).catch(error => {
+          console.warn('[call] ringtone playback blocked', error);
+          this.ringtoneHelpBtn.hidden = false;
+        });
+      }
     } catch (error) {
       console.warn('[call] ringtone unavailable', error);
       this.#stopRingtone();
@@ -108,6 +117,7 @@ class CallScreen {
   #stopRingtone() {
     clearInterval(this.ringtoneTimer);
     this.ringtoneTimer = null;
+    this.ringtoneRing = null;
     try { this.ringtoneOscillator?.stop(); } catch {}
     this.ringtoneOscillator = null;
     const context = this.ringtoneContext;
@@ -125,6 +135,9 @@ class CallScreen {
     this.playAudioBtn = h('button', {
       class: 'pill-btn call-audio-playback', type: 'button', hidden: true, onclick: () => this.#enableRemoteAudio(),
     }, t('tapForSound'));
+    this.ringtoneHelpBtn = h('button', {
+      class: 'pill-btn call-audio-playback', type: 'button', hidden: true, onclick: () => this.#enableRingtone(),
+    }, t('enableRingtone'));
     this.retryBtn = h('button', {
       class: 'pill-btn call-retry', type: 'button', hidden: true, onclick: () => this.#connect(),
     }, t('retry'));
@@ -141,7 +154,7 @@ class CallScreen {
       h('button', { class: 'call-btn accept', type: 'button', 'aria-label': t('accept'), html: this.mode === 'video' ? icon.camera : icons.phone, onclick: () => this.#accept() }));
     this.root = h('div', { class: 'call-layer', role: 'dialog', 'aria-modal': 'true', 'aria-label': this.mode === 'video' ? t('videoCall') : t('audioCall'), 'data-mode': this.mode },
       this.remote, this.local,
-      h('div', { class: 'call-info' }, avatar(person, 104), h('b', { class: 'call-name' }, person.name), this.status, this.playAudioBtn, this.errorMessage, this.retryBtn),
+      h('div', { class: 'call-info' }, avatar(person, 104), h('b', { class: 'call-name' }, person.name), this.status, this.playAudioBtn, this.ringtoneHelpBtn, this.errorMessage, this.retryBtn),
       this.controls, this.answer, this.audioBox);
     document.body.append(this.root);
     requestAnimationFrame(() => this.root.classList.add('open'));
@@ -333,6 +346,22 @@ class CallScreen {
       await Promise.all([...this.audioBox.querySelectorAll('audio')].map(element => element.play()));
       this.playAudioBtn.hidden = true;
     } catch (error) { toast(error?.message || t('callFailed')); }
+  }
+
+  async #enableRingtone() {
+    if (!this.ringtoneContext || this.ringtoneContext.state === 'closed') {
+      toast(t('soundTestBlocked'));
+      return;
+    }
+    try {
+      await this.ringtoneContext.resume();
+      this.ringtoneRing?.();
+      this.ringtoneHelpBtn.hidden = this.ringtoneContext.state === 'running';
+      if (this.ringtoneHelpBtn.hidden) toast(t('soundTestPlayed'));
+    } catch (error) {
+      console.warn('[call] ringtone playback remains blocked', error);
+      toast(t('soundTestBlocked'));
+    }
   }
 
   async #accept() {

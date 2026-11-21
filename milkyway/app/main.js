@@ -150,7 +150,10 @@ function route() {
     params.delete('do');
     const query = params.toString();
     history.replaceState(null, '', location.pathname + (query ? `?${query}` : ''));
-    if (requireLogin()) callView().then(calls => calls.handleNotification(call, action));
+    if (requireLogin()) {
+      if (action === 'missed') inboxView().then(view => view.open());
+      else callView().then(calls => calls.handleNotification(call, action));
+    }
   }
   if (comingSoon(location.hash)) { history.replaceState(null, '', location.pathname + location.search); soon(); }
   const hash = decodeURIComponent(location.hash.slice(1));
@@ -158,6 +161,32 @@ function route() {
   else if (shell.dataset.view === 'live') showHome();
 }
 addEventListener('popstate', route);
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', ({ data }) => {
+    if (data?.type === 'mw-open-url' || data?.type === 'mw-open-live') {
+      if (typeof data.url !== 'string') return;
+      let address;
+      try { address = new URL(data.url, location.href); } catch { return; }
+      if (address.origin !== location.origin || address.pathname !== '/milkyway/') return;
+      const postId = address.searchParams.get('post');
+      if (postId) {
+        fetchSharedPost(postId).then(openPost).catch(error => toast(error?.message || t('imageUnavailable')));
+        return;
+      }
+      if (comingSoon(address.hash)) soon();
+      else if (address.hash) { history.pushState(null, '', address.hash); route(); }
+    } else if (data?.type === 'mw-call-push' || data?.type === 'mw-call-action') {
+      let linkedCall = null;
+      try { linkedCall = callLink(new URL(data.url || location.href, location.href).hash); } catch {}
+      const id = data.callId || data.call?.id || data.id || linkedCall;
+      if (auth.signedIn()) {
+        if (data.action === 'missed') inboxView().then(view => view.open());
+        else callView().then(calls => (id ? calls.handleNotification(String(id), data.action || '') : calls.watch()));
+      }
+    }
+  });
+}
 
 document.addEventListener('click', event => {
   const target = event.target.closest('[data-scope], [data-nav], #liveEntry, #walkieEntry, #muteToggle, #profileSearch');
@@ -267,19 +296,6 @@ idle(() => {
     lives.subscribe(list => $('liveEntry')?.classList.toggle('has-live', (list?.length || 0) > 0));
     lives.load();
   });
-  if ('serviceWorker' in navigator) {
-    // Notification taps forwarded by the worker: Lives and calls open here.
-    navigator.serviceWorker.addEventListener('message', ({ data }) => {
-      if (data?.type === 'mw-open-live' && data.url) {
-        const hash = new URL(data.url).hash;
-        if (comingSoon(hash)) soon();
-        else { history.pushState(null, '', hash); route(); }
-      } else if (data?.type === 'mw-call-push' || data?.type === 'mw-call-action') {
-        const id = data.callId || data.call?.id || data.id || callLink(new URL(data.url || location.href, location.href).hash);
-        if (auth.signedIn()) callView().then(calls => (id ? calls.handleNotification(String(id), data.action || '') : calls.watch()));
-      }
-    });
-  }
   startUpdateCheck(config.deploymentId);
   initPushNotifications();
 }, 2500);

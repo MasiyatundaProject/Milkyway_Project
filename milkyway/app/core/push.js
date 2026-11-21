@@ -70,20 +70,18 @@ async function registerWeb() {
 }
 
 async function register() {
-  try {
-    if (native) await registerNative();
-    else await registerWeb();
-  } catch (error) {
-    console.warn('[push] Device registration failed.', error);
-  }
+  if (native) await registerNative();
+  else await registerWeb();
 }
 
-async function permission() {
+export async function notificationPermission() {
   if (native) {
     if (!push) return 'unavailable';
-    try { return (await push.checkPermissions()).receive; } catch { return 'denied'; }
+    return (await push.checkPermissions()).receive;
   }
-  return 'Notification' in window ? Notification.permission : 'unavailable';
+  return 'Notification' in window && 'serviceWorker' in navigator && 'PushManager' in window
+    ? Notification.permission
+    : 'unavailable';
 }
 
 async function requestPermission() {
@@ -94,15 +92,29 @@ async function requestPermission() {
     if (status.receive === 'granted') await register();
     return status.receive;
   }
-  if (!('Notification' in window)) return 'unavailable';
+  if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) return 'unavailable';
   const result = await Notification.requestPermission();
   if (result === 'granted') await register();
   return result;
 }
 
+export async function enableNotifications() {
+  if (!native) {
+    if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) return 'unavailable';
+    if (Notification.permission === 'granted') {
+      await register();
+      return 'granted';
+    }
+    return requestPermission();
+  }
+  const current = await notificationPermission();
+  if (current === 'granted') { await register(); return current; }
+  return requestPermission();
+}
+
 async function offer() {
   if (prompting || !auth.signedIn()) return;
-  const state = await permission();
+  const state = await notificationPermission();
   if (state === 'granted') { await register(); return; }
   if (state === 'denied' || state === 'unavailable') return;
   const last = Number(localStorage.getItem(OFFERED) || 0);
@@ -157,9 +169,9 @@ export function initPushNotifications() {
   bus.on('auth', () => {
     savedTokenKey = '';
     if (auth.signedIn()) {
-      void register();
+      void register().catch(error => console.warn('[push] Device registration failed.', error));
       void saveToken();
     }
   });
-  if (auth.signedIn()) void register();
+  if (auth.signedIn()) void register().catch(error => console.warn('[push] Device registration failed.', error));
 }

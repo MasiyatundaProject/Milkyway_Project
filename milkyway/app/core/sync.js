@@ -123,7 +123,20 @@ export async function perform(type, payload) {
     catch (error) { if (!isNetworkError(error)) throw error; }
   }
   await outbox.add(op);
+  if ('serviceWorker' in navigator) {
+    void navigator.serviceWorker.ready.then(registration => {
+      navigator.serviceWorker.controller?.postMessage({ type: 'mw-register-sync' });
+      return registration.sync?.register('mw-reconnect');
+    })
+      .catch(error => console.warn('[sync] Background reconnect could not be scheduled.', error));
+  }
   return 'queued';
+}
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', event => {
+    if (event.data?.type === 'mw-reconnect') void flushOutbox();
+  });
 }
 
 bus.on('online', () => { flushOutbox(); resources.forEach(resource => resource.value !== undefined && resource.refresh()); });
