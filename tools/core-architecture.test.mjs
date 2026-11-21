@@ -160,6 +160,8 @@ test('Watch Together synchronizes authorized chat playback and cleans up its pla
   const forwardMigration = readFileSync(new URL('../supabase/migrations/20261216_milkyway_watch_party_dm_access.sql', import.meta.url), 'utf8');
   const repair = readFileSync(new URL('../supabase/milkyway-schema-repair.sql', import.meta.url), 'utf8');
   const worker = readFileSync(new URL('../milkyway/sw.js', import.meta.url), 'utf8');
+  assert.match(worker, /const CACHE='milkyway-v249-watch-party-access'/);
+  assert.doesNotMatch(worker, /Could not connect to Watch Together\. Check chat access and your connection\./);
   assert.ok(watch.includes("`mw-watch:dm:${[auth.userId, this.roomId].sort().join(':')}`"));
   assert.match(watch, /\.on\('broadcast', \{ event: 'watch-party' \}/);
   assert.match(watch, /'play', 'pause', 'seek', 'sync'/);
