@@ -45,7 +45,7 @@ export default route({
       .map(row => ({
         id: row.mw_dm_groups.id, name: row.mw_dm_groups.name,
         caption: row.mw_dm_groups.caption || '', avatar_url: row.mw_dm_groups.avatar_url || '',
-        join_mode: row.mw_dm_groups.join_mode || 'invite_only',
+        join_mode: row.mw_dm_groups.join_mode || 'open',
         role: row.role, join_status: row.join_status || 'active',
         created_at: row.mw_dm_groups.created_at,
       }))

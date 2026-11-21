@@ -270,7 +270,7 @@ test('group list keeps Walkie-Talkie conversations available when newer group co
     const result = await response.json();
     assert.equal(result.groups[0].name, 'Community');
     assert.equal(result.groups[0].avatar_url, '');
-    assert.equal(result.groups[0].join_mode, 'invite_only');
+    assert.equal(result.groups[0].join_mode, 'open');
     const groupQueries = urls.filter(url => url.includes('/rest/v1/mw_dm_group_members?'));
     assert.equal(groupQueries.length, 3);
     assert.match(groupQueries[0], /avatar_url/);
