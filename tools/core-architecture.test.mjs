@@ -1,5 +1,6 @@
 // Tests for the rebuilt MilkyWay core: the single-request feed API and the non-blocking app shell.
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { test } from 'node:test';
 import feed from '../api/milkyway-feed.js';
@@ -231,8 +232,18 @@ test('LiveKit reads Cloudflare bindings first and identifies missing credentials
   assert.equal(claims.video.room, `dm-call-${A}-${B}`);
 });
 
-test('Cloudflare Pages API passes its LiveKit bindings through to the DM call token issuer', async () => {
+test('Hosted API routes dispatch DM video-call tokens to the configured LiveKit signer', async () => {
   assert.equal(SCREEN_SHARE, 3);
+  const fetchAdapter = readFileSync(new URL('../api/_lib/fetch-adapter.js', import.meta.url), 'utf8');
+  const cloudflareApi = readFileSync(new URL('../functions/api/_middleware.js', import.meta.url), 'utf8');
+  const netlifyApi = readFileSync(new URL('../netlify/functions/milkyway-api.mjs', import.meta.url), 'utf8');
+  const server = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  assert.match(fetchAdapter, /'milkyway-call': call/);
+  assert.match(cloudflareApi, /runApi\(name, request, env\)/);
+  assert.match(netlifyApi, /runApi\(context\.params\.name, request\)/);
+  assert.match(netlifyApi, /path: '\/api\/:name'/);
+  assert.match(server, /app\.all\('\/api\/:name'/);
+
   const originalFetch = globalThis.fetch;
   const callId = P(81);
   const call = {
@@ -261,7 +272,11 @@ test('Cloudflare Pages API passes its LiveKit bindings through to the DM call to
     assert.equal(payload.serverUrl, 'wss://binding-live.example.test');
     assert.equal(payload.callType, 'video');
     assert.equal(payload.videoEnabled, true);
-    const claims = JSON.parse(Buffer.from(payload.token.split('.')[1], 'base64url'));
+    const [headerPart, claimsPart, signature] = payload.token.split('.');
+    const header = JSON.parse(Buffer.from(headerPart, 'base64url'));
+    const claims = JSON.parse(Buffer.from(claimsPart, 'base64url'));
+    assert.equal(header.alg, 'HS256');
+    assert.equal(signature, createHmac('sha256', 'binding-secret').update(`${headerPart}.${claimsPart}`).digest('base64url'));
     assert.equal(claims.iss, 'binding-key');
     assert.equal(claims.sub, A);
     assert.equal(claims.video.room, `dm-call-${A}-${B}`);
@@ -715,7 +730,7 @@ test('DM call connection uses authenticated LiveKit tokens and reports server co
   assert.match(callView, /#showMediaError\(error, 'camera toggle'\)/);
   assert.match(callView, /CALL_TOKEN_ENDPOINT = `\$\{config\.api\.base\}\/milkyway-call\?action=token`/);
   assert.match(callView, /action === 'token' \? CALL_TOKEN_ENDPOINT/);
-  assert.match(callView, /action === 'token' \? \{ cache: 'no-store' \}/);
+  assert.match(callView, /\.\.\.\(action === 'token' \? \{ cache: 'no-store' \} : \{\}\)/);
   assert.match(callView, /participantIdentity: auth\.userId/);
   assert.match(callView, /roomName: this\.roomName/);
   assert.match(callView, /errorCode: callErrorCode\(error\)/);
