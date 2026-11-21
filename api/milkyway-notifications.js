@@ -8,8 +8,6 @@ function mustUse(method, allowed) {
   if (!allowed.includes(method)) throw new ApiError(405, 'Method not allowed.');
 }
 
-const isMissingColumn = (error, column) => isMissingSchema(error)
-  && new RegExp(`\\b${column}\\b`, 'i').test(String(error?.message || ''));
 const PAGE_SIZE = 1000;
 const MAX_PAGE_SIZE = 10000;
 async function pages(ctx, path) {
@@ -27,14 +25,7 @@ async function pages(ctx, path) {
 }
 
 async function loadLiveAlerts(ctx) {
-  const base = `mw_live_alerts?recipient_id=${eq(ctx.user.id)}&`;
-  try {
-    return await ctx.rest(`${base}select=room_name,host_id,host_name,title,created_at,read_at&order=created_at.desc&limit=100`);
-  } catch (error) {
-    if (!isMissingColumn(error, 'room_name')) throw error;
-    const rows = await ctx.rest(`${base}select=room,host_id,host_name,title,created_at,read_at&order=created_at.desc&limit=100`);
-    return (rows || []).map(row => ({ ...row, room_name: row.room }));
-  }
+  return ctx.rest(`mw_live_alerts?recipient_id=${eq(ctx.user.id)}&select=room,host_id,host_name,title,created_at,read_at&order=created_at.desc&limit=100`);
 }
 
 async function loadUnreadMessages(ctx) {
@@ -139,7 +130,7 @@ export default route({
       loadCallAlerts(ctx),
     ]);
     const liveAlerts = (liveRows || []).map(row => ({
-      type: 'live', room: row.room_name || row.room, hostId: row.host_id,
+      type: 'live',       room: row.room, hostId: row.host_id,
       hostName: row.host_name || '', title: row.title || '',
       createdAt: row.created_at, read: !!row.read_at,
     }));
@@ -168,12 +159,7 @@ export default route({
     if (!rooms.length && !postIds.length && !callIds.length) throw new ApiError(400, 'No notifications to mark as read.');
     if (rooms.length) {
       const list = rooms.map(room => encodeURIComponent(room)).join(',');
-      try {
-        await ctx.rest(`mw_live_alerts?recipient_id=${eq(ctx.user.id)}&room_name=in.(${list})&read_at=is.null`, { method: 'PATCH', body: { read_at: at } });
-      } catch (error) {
-        if (!isMissingColumn(error, 'room_name')) throw error;
-        await ctx.rest(`mw_live_alerts?recipient_id=${eq(ctx.user.id)}&room=in.(${list})&read_at=is.null`, { method: 'PATCH', body: { read_at: at } });
-      }
+      await ctx.rest(`mw_live_alerts?recipient_id=${eq(ctx.user.id)}&room=in.(${list})&read_at=is.null`, { method: 'PATCH', body: { read_at: at } });
     }
     if (postIds.length) {
       const list = postIds.map(id => encodeURIComponent(id)).join(',');

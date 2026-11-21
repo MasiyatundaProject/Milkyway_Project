@@ -431,9 +431,8 @@ test('notification activity supports legacy LIVE alerts and badges direct and gr
   assert.match(api, /mw_dm_group_members\?select=group_id,role,join_status,joined_at,mw_dm_groups\(name\)/);
   assert.match(api, /mw_dm_group_reads\?select=group_id,read_at/);
   assert.match(api, /Group read-state table is unavailable/);
-  assert.doesNotMatch(api, /mw_live_alerts[^`\n]*select=id/i);
-  assert.match(api, /select=room_name,host_id,host_name,title,created_at,read_at/);
-  assert.match(api, /select=room,host_id,host_name,title,created_at,read_at/);
+  assert.doesNotMatch(api, /mw_live_alerts[^`\n]*select=[^`\n]*\bid\b/i);
+  assert.match(api, /mw_live_alerts\?recipient_id=.*?select=room,host_id,host_name,title,created_at,read_at/);
   assert.match(api, /room=in\.\(\$\{list\}\)/);
   assert.match(api, /mw_post_notifications\?recipient_id=/);
   assert.match(api, /loadUnreadMessages/);
