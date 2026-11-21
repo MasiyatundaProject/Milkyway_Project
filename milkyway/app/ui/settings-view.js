@@ -4,6 +4,7 @@ import { config } from '../config.js';
 import { t, lang, languages, setLanguage } from '../core/i18n.js';
 import { api, auth, supabase } from '../core/net.js';
 import { bus } from '../core/events.js';
+import { playback } from './playback.js';
 import { enableNotifications, notificationPermission } from '../core/push.js';
 import { testIncomingRingtone } from '../core/ringtone.js';
 import { openFilePicker } from '../core/media-files.js';
@@ -297,8 +298,15 @@ export class NovaMenu {
   async #privacy() {
     const box = h('div', { class: 'stack' }, h('p', { class: 'muted center' }, t('loading')));
     this.#screen(t('privacy'), box);
-    let prefs;
-    try { prefs = (await api(`${ACCOUNT}?action=preferences`, { timeout: 10000 }))?.preferences || {}; }
+    let prefs, autoplay;
+    try {
+      const [result, savedAutoplay] = await Promise.all([
+        api(`${ACCOUNT}?action=preferences`, { timeout: 10000 }),
+        playback.loadAutoplay(),
+      ]);
+      prefs = result?.preferences || {};
+      autoplay = savedAutoplay;
+    }
     catch (error) { box.replaceChildren(h('p', { class: 'muted center' }, error?.message || t('retry'))); return; }
     const save = async (patch, input) => {
       try {
@@ -360,6 +368,8 @@ export class NovaMenu {
       toggle(t('notifyFollow'), prefs.notifyFollow !== false, (on, input) => save({ notifyFollow: on }, input)),
       toggle(t('notifyEcho'), prefs.notifyEcho !== false, (on, input) => save({ notifyEcho: on }, input)),
       toggle(t('notifySignal'), prefs.notifySignal !== false, (on, input) => save({ notifySignal: on }, input)),
+      h('p', { class: 'nova-section' }, t('playbackSettings')),
+      toggle(t('autoplayVideos'), autoplay, on => { playback.setAutoplay(on); toast(t('settingsSaved')); }, t('autoplayVideosHint')),
       h('p', { class: 'nova-section' }, t('onlineStatus')),
       toggle(t('showOnline'), presence.visible, async on => { await presence.setVisible(on); toast(t('settingsSaved')); }));
   }

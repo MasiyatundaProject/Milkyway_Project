@@ -220,7 +220,7 @@ if ('serviceWorker' in navigator) {
 }
 
 document.addEventListener('click', event => {
-  const target = event.target.closest('[data-scope], [data-nav], #liveEntry, #walkieEntry, #muteToggle, #profileSearch, #notificationsButton');
+  const target = event.target.closest('[data-scope], [data-nav], #liveEntry, #walkieEntry, #profileSearch, #notificationsButton');
   if (!target) return;
   if (target.dataset.scope) { if (shell.dataset.view !== 'home') showHome(); setScope(target.dataset.scope); return; }
   if (target.id === 'liveEntry') { showLive(); return; }
@@ -231,7 +231,6 @@ document.addEventListener('click', event => {
     });
     return;
   }
-  if (target.id === 'muteToggle') { playback.setMuted(!playback.muted); return; }
   if (target.id === 'profileSearch') { profileSearch().then(view => view.open()); return; }
   if (target.id === 'notificationsButton') {
     if (requireLogin()) notificationsView().then(view => view.open()).catch(error => {
@@ -303,9 +302,6 @@ bus.on('auth', () => {
   }
 });
 shell.toggleAttribute('data-signed-in', auth.signedIn());
-playback.onMute(muted => shell.toggleAttribute('data-muted', muted));
-shell.toggleAttribute('data-muted', playback.muted);
-
 // ---- Go -----------------------------------------------------------------------------------------------------
 document.querySelectorAll('[data-i18n]').forEach(node => { node.textContent = t(node.dataset.i18n); });
 $('profileSearch').setAttribute('aria-label', t('searchPeople'));

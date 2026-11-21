@@ -47,7 +47,10 @@ export class FeedView {
       onNearEnd: () => this.source?.more(),
     });
     this.#bindEvents();
-    playback.onMute(muted => this.root.classList.toggle('is-muted', muted));
+    playback.onMute(muted => {
+      this.root.classList.toggle('is-muted', muted);
+      this.pager.mounted.forEach(slide => this.#paintMute(slide));
+    });
     this.root.classList.toggle('is-muted', playback.muted);
     bus.on('follow', () => this.pager.mounted.forEach(slide => { this.#paintFollow(slide, slide._post); if (slide._post?.kind === 'suggest') this.#paintSuggest(slide); }));
     this.promo = { ads: [], people: [] };
@@ -164,7 +167,19 @@ export class FeedView {
     const seek = h('input', { class: 'video-seek', type: 'range', min: '0', max: '1000', step: '1', value: '0', 'aria-label': 'Seek video' });
     const currentTime = h('span', { class: 'video-time', 'aria-live': 'off' }, '0:00');
     const durationTime = h('span', { class: 'video-time', 'aria-live': 'off' }, '0:00');
-    const videoControls = h('div', { class: 'video-controls', 'data-act': 'video-controls' }, currentTime, seek, durationTime);
+    const mute = h('button', {
+      class: 'video-mute',
+      type: 'button',
+      'aria-pressed': String(playback.muted),
+      'aria-label': playback.muted ? t('unmuteVideo') : t('muteVideo'),
+      title: playback.muted ? t('unmuteVideo') : t('muteVideo'),
+      onclick: event => {
+        event.stopPropagation();
+        playback.setMuted(!playback.muted);
+        this.#showVideoControls(slide);
+      },
+    }, h('span', { class: 'i-muted', html: icon.muted }), h('span', { class: 'i-sound', html: icon.sound }));
+    const videoControls = h('div', { class: 'video-controls', 'data-act': 'video-controls' }, currentTime, seek, durationTime, mute);
     const stopSeekPropagation = event => event.stopPropagation();
     for (const type of ['pointerdown', 'pointerup', 'touchstart', 'touchend', 'click']) videoControls.addEventListener(type, stopSeekPropagation);
     seek.addEventListener('input', () => {
@@ -206,7 +221,8 @@ export class FeedView {
       h('aside', { class: 'rail' }, h('div', { class: 'rail-author', 'data-act': 'profile' }, avatarNode, follow), like, comment, save, gift, share),
       h('div', { class: 'meta' }, name, caption, adBar), suggest,
       videoControls);
-    slide._refs = { video, img, text, paused, missing, slideshowBadge, avatarNode, follow, like, comment, save, gift, share, name, caption, videoControls, seek, currentTime, durationTime, adBar, suggest };
+    slide._refs = { video, img, text, paused, missing, slideshowBadge, avatarNode, follow, like, comment, save, gift, share, name, caption, videoControls, seek, currentTime, durationTime, mute, adBar, suggest };
+    this.#paintMute(slide);
     const imagePointers = new Map();
     let imagePinch = null, imageScale = 1, imageX = 0, imageY = 0, suppressImageClickUntil = 0;
     const paintImageZoom = () => {
@@ -389,6 +405,15 @@ export class FeedView {
     r.save.querySelector('b').textContent = '';
     r.gift.querySelector('b').textContent = '';
     r.share.querySelector('b').textContent = '';
+  }
+
+  #paintMute(slide) {
+    const button = slide._refs?.mute;
+    if (!button) return;
+    button.setAttribute('aria-pressed', String(playback.muted));
+    const label = playback.muted ? t('unmuteVideo') : t('muteVideo');
+    button.setAttribute('aria-label', label);
+    button.title = label;
   }
 
   #paintFollow(slide, post) {

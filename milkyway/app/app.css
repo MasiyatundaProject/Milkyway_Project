@@ -39,7 +39,7 @@ svg { width: 1em; height: 1em; fill: currentColor; display: block; }
 /* ---- Top bar & bottom nav --------------------------------------------------------------------------------- */
 .topbar {
   position: fixed; z-index: 20; inset: 0 0 auto; height: var(--top-h); padding: env(safe-area-inset-top) 12px 0;
-  display: grid; grid-template-columns: 64px minmax(0, 1fr) 62px 40px 40px 40px; align-items: center;
+  display: grid; grid-template-columns: 64px minmax(0, 1fr) 62px 40px 40px; align-items: center;
   background: linear-gradient(rgba(5,6,26,.6), transparent); pointer-events: none;
 }
 .topbar > * { pointer-events: auto; }
@@ -57,15 +57,12 @@ html[data-view="explore"] .topbar { display: none; }
 .walkie-entry svg { width: 22px; height: 22px; }
 .walkie-label { max-width: 60px; font-size: 9px; line-height: 11px; font-weight: 800; white-space: nowrap; color: currentColor; text-align: center; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
 .walkie-entry.hide-label .walkie-label { display: none; }
-.mute-toggle { justify-self: end; grid-column: 4; }
-.profile-search { justify-self: end; grid-column: 5; }
-.notifications-button { justify-self: end; grid-column: 6; position: relative; }
+.profile-search { justify-self: end; grid-column: 4; }
+.notifications-button { justify-self: end; grid-column: 5; position: relative; }
 .notifications-button svg { width: 22px; height: 22px; filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }
 .notification-unread { position: absolute; top: 2px; right: 1px; min-width: 9px; height: 9px; border: 1.5px solid #090b28; border-radius: 99px; background: #ff526d; }
 .notification-unread.has-count { top: -3px; right: -5px; min-width: 17px; height: 17px; padding: 0 4px; display: grid; place-items: center; color: white; font-size: 10px; font-weight: 800; line-height: 1; }
 .notification-unread[hidden] { display: none; }
-.mute-toggle svg { font-size: 22px; filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }
-html[data-muted] .mute-toggle .i-sound, html:not([data-muted]) .mute-toggle .i-muted { display: none; }
 .bottombar {
   position: fixed; z-index: 20; inset: auto 0 0; height: var(--nav-h); padding-bottom: env(safe-area-inset-bottom);
   display: grid; grid-template-columns: repeat(5, 1fr); align-items: center; background: linear-gradient(180deg, rgba(9,11,40,.94), rgba(4,5,18,.98)); border-top: 1px solid var(--line);
@@ -211,9 +208,12 @@ html[data-muted] .mute-toggle .i-sound, html:not([data-muted]) .mute-toggle .i-m
 .meta-name { font-weight: 700; font-size: 16px; margin-bottom: 6px; }
 .meta-caption { margin: 0; font-size: 14.5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; cursor: pointer; }
 .meta-caption.open { -webkit-line-clamp: 12; }
-.video-controls { position: absolute; z-index: 4; inset: auto 70px calc(env(safe-area-inset-bottom) + 18px) 12px; display: grid; grid-template-columns: auto minmax(50px, 1fr) auto; align-items: center; gap: 8px; padding: 8px 2px; opacity: 0; transform: translateY(5px); pointer-events: none; transition: opacity .2s ease, transform .2s ease; }
+.video-controls { position: absolute; z-index: 4; inset: auto 70px calc(env(safe-area-inset-bottom) + 18px) 12px; display: grid; grid-template-columns: auto minmax(50px, 1fr) auto auto; align-items: center; gap: 8px; padding: 8px 2px; opacity: 0; transform: translateY(5px); pointer-events: none; transition: opacity .2s ease, transform .2s ease; }
 .slide.controls-visible .video-controls { opacity: 1; transform: translateY(0); pointer-events: auto; }
 .video-controls[hidden] { display: none; }
+.video-mute { width: 30px; height: 30px; display: grid; place-items: center; padding: 4px; border-radius: 50%; background: rgba(0,0,0,.45); color: #fff; }
+.video-mute svg { width: 20px; height: 20px; filter: drop-shadow(0 1px 2px rgba(0,0,0,.7)); }
+.video-mute[aria-pressed="true"] .i-sound, .video-mute[aria-pressed="false"] .i-muted { display: none; }
 .video-seek { appearance: none; width: 100%; min-width: 0; height: 18px; margin: 0; border: 0; border-radius: 99px; outline: none; background: transparent; touch-action: pan-x; cursor: pointer; }
 .video-seek::-webkit-slider-runnable-track { height: 3px; border-radius: 99px; background: linear-gradient(to right, #fff var(--seek-progress, 0%), rgba(255,255,255,.35) var(--seek-progress, 0%)); }
 .video-seek::-moz-range-track { height: 3px; border-radius: 99px; background: rgba(255,255,255,.35); }

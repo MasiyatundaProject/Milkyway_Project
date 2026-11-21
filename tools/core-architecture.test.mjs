@@ -1037,6 +1037,15 @@ test('feed videos use tap-to-show scrubbers and post photos pinch to zoom', () =
   assert.match(feed, /slide\.dataset\.fit = 'contain'/);
   assert.match(styles, /\.media video, \.media img[^}]*object-fit: contain/);
   assert.doesNotMatch(styles, /\.slide\[data-fit="cover"\]/);
+  assert.match(feed, /class: 'video-mute'/);
+  assert.match(feed, /playback\.setMuted\(!playback\.muted\)/);
+  const shell = readFileSync(new URL('../milkyway/index.html', import.meta.url), 'utf8');
+  assert.doesNotMatch(shell, /id="muteToggle"/);
+  const playback = readFileSync(new URL('../milkyway/app/ui/playback.js', import.meta.url), 'utf8');
+  assert.match(playback, /:feed:autoplay/);
+  assert.match(playback, /!this\.autoplay && !this\.userStarted\.has\(video\)/);
+  const settings = readFileSync(new URL('../milkyway/app/ui/settings-view.js', import.meta.url), 'utf8');
+  assert.match(settings, /t\('autoplayVideos'\)/);
   assert.match(styles, /\.scope-tabs button\[aria-selected="true"\]::after[^}]*width: 26px/);
   assert.match(pager, /event\.isPrimary === false/);
   assert.match(pager, /\.image-zoomed/);
