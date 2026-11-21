@@ -1,7 +1,7 @@
 // MilkyWay service worker.
 // Precaches the new app shell (index.html + app/ modules) so startup never waits for the network; the feed itself
 // comes from IndexedDB (app/core/store.js). Other assets are cached on first use by the shared stale-while-revalidate rule.
-const CACHE='milkyway-v247-dm-video';
+const CACHE='milkyway-v248-call-layout';
 const SHELL=['./','./index.html','./manifest.json','./favicon.ico','./icon-192.png','./icon-512.png','./brand/favicon-32.png','./splash.css?v=1','./splash.js?v=1','./brand/milkyway-splash.webp','./brand/milkyway-watermark-galaxy.webp',
   './app/app.css?v=33','./app/main.js','./app/config.js',
   './app/core/events.js','./app/core/sdk.js','./app/core/livekit-access.js','./app/core/net.js','./app/core/store.js','./app/core/sync.js','./app/core/device.js','./app/core/media.js','./app/core/media-files.js','./app/core/media-image.js','./app/core/media-worker.js','./app/core/media-optimizer.js','./app/core/update-check.js','./app/core/i18n.js','./app/core/locales.js','./app/core/push.js','./app/core/ringtone.js','./app/core/notification-sound.js',

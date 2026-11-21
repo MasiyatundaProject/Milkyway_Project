@@ -983,6 +983,11 @@ test('DM call connection uses authenticated LiveKit tokens and reports server co
   assert.match(callView, /playAudioBtn/);
   assert.match(callView, /#enableRemoteAudio/);
   assert.match(callView, /assertRoomAccess/);
+  assert.match(callCss, /\.call-controls, \.call-answer \{ position: fixed; z-index: 4;/);
+  assert.match(callCss, /bottom: calc\(16px \+ env\(safe-area-inset-bottom\)\)/);
+  assert.match(callCss, /\.call-remote \{[^}]*pointer-events: none/);
+  assert.match(callCss, /\.call-btn \{[^}]*min-width: 48px; min-height: 48px/);
+  assert.match(callCss, /@media \(max-height: 520px\)/);
   assert.match(callView, /isUsageLimitError/);
   assert.match(callView, /LiveKit usage limit reached/);
   assert.doesNotMatch(callView, /if \(isUsageLimitError\(error\)\) throw error/);
