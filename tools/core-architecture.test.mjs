@@ -7,7 +7,7 @@ import liveRoom from '../api/milkyway-live-room.js';
 import callApi from '../api/milkyway-call.js';
 import livekitToken from '../api/milkyway-livekit-token.js';
 import { runApi } from '../api/_lib/fetch-adapter.js';
-import { accessToken, closeRoom, livekitConfigurationError, livekitConfigured, livekitUrl, livekitUsable } from '../api/_lib/livekit.js';
+import { accessToken, closeRoom, livekitConfigurationError, livekitConfigured, livekitUrl, livekitUsable, SCREEN_SHARE } from '../api/_lib/livekit.js';
 import { postShareResponse } from '../api/_lib/post-share.js';
 import { assertRoomAccess } from '../milkyway/app/core/livekit-access.js';
 import { identifyMediaFile, mediaInfo, openFilePicker } from '../milkyway/app/core/media-files.js';
@@ -232,6 +232,7 @@ test('LiveKit reads Cloudflare bindings first and identifies missing credentials
 });
 
 test('Cloudflare Pages API passes its LiveKit bindings through to the DM call token issuer', async () => {
+  assert.equal(SCREEN_SHARE, 3);
   const originalFetch = globalThis.fetch;
   const callId = P(81);
   const call = {
@@ -268,7 +269,8 @@ test('Cloudflare Pages API passes its LiveKit bindings through to the DM call to
     assert.equal(claims.video.canPublish, true);
     assert.equal(claims.video.canSubscribe, true);
     assert.equal(claims.video.canPublishData, true);
-    assert.deepEqual(claims.video.canPublishSources, ['camera', 'microphone']);
+    assert.deepEqual(claims.video.canPublishSources, ['camera', 'microphone', 'screen_share']);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
     assert.deepEqual(JSON.parse(claims.metadata), { avatar: '', callType: 'video', videoEnabled: true });
     const missingResponse = await runApi('milkyway-call', new Request('https://www.masiyatunda.com/api/milkyway-call?action=start', {
       method: 'POST',
@@ -713,6 +715,7 @@ test('DM call connection uses authenticated LiveKit tokens and reports server co
   assert.match(callView, /#showMediaError\(error, 'camera toggle'\)/);
   assert.match(callView, /CALL_TOKEN_ENDPOINT = `\$\{config\.api\.base\}\/milkyway-call\?action=token`/);
   assert.match(callView, /action === 'token' \? CALL_TOKEN_ENDPOINT/);
+  assert.match(callView, /action === 'token' \? \{ cache: 'no-store' \}/);
   assert.match(callView, /participantIdentity: auth\.userId/);
   assert.match(callView, /roomName: this\.roomName/);
   assert.match(callView, /errorCode: callErrorCode\(error\)/);
@@ -725,6 +728,7 @@ test('DM call connection uses authenticated LiveKit tokens and reports server co
   assert.match(callView, /await room\.connect\(access\.serverUrl, access\.token/);
   assert.match(callView, /setMicrophoneEnabled\(this\.micOn\)/);
   assert.match(callView, /setCameraEnabled\(this\.camOn/);
+  assert.match(callView, /await room\.localParticipant\.setCameraEnabled\(true,[\s\S]*?#showMediaError\(error, 'camera publishing'\)/);
   assert.match(callView, /publication\.track\?\.detach\(\)/);
   assert.match(callView, /room\.disconnect\(\)/);
   assert.match(callView, /playAudioBtn/);

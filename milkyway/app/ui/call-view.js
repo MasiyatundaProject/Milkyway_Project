@@ -32,7 +32,9 @@ async function callAccessToken(roomName, callId, name) {
   return assertRoomAccess(access, roomName);
 }
 const RING_MS = 55_000;
-const callApi = (action, body) => api(action === 'token' ? CALL_TOKEN_ENDPOINT : `${CALL_API}?action=${action}`, body ? { method: 'POST', body, timeout: 15000 } : { timeout: 12000 });
+const callApi = (action, body) => api(action === 'token' ? CALL_TOKEN_ENDPOINT : `${CALL_API}?action=${action}`, body ? {
+  method: 'POST', body, timeout: 15000, ...(action === 'token' ? { cache: 'no-store' } : {}),
+} : { timeout: 12000 });
 const getCall = id => api(`${CALL_API}?id=${encodeURIComponent(id)}`, { timeout: 10000 }).then(data => data?.call || null);
 const callTypeOf = call => call?.offer?.callType === 'video' || call?.offer?.mode === 'video' || call?.offer?.videoEnabled === true ? 'video' : 'audio';
 

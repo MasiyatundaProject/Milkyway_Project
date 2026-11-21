@@ -1,5 +1,5 @@
 import { route, ApiError, SUPABASE, requireUuid } from './_lib/supa.js';
-import { livekitUrl, livekitConfigurationError, accessToken, closeRoom, CAMERA, MIC } from './_lib/livekit.js';
+import { livekitUrl, livekitConfigurationError, accessToken, closeRoom, CAMERA, MIC, SCREEN_SHARE } from './_lib/livekit.js';
 
 const OUTCOMES = ['ended', 'missed', 'cancelled', 'rejected', 'disconnected'];
 const RING_WINDOW_MS = 60000;
@@ -25,7 +25,7 @@ async function access(ctx, call, name) {
   let profile = null;
   try { [profile] = await ctx.rest(`mw_profiles?id=eq.${ctx.user.id}&select=display_name,username,avatar_url&limit=1`) || []; } catch {}
   const token = accessToken({
-    identity: ctx.user.id, room: roomName, canPublish: true, sources: videoEnabled ? [CAMERA, MIC] : [MIC], ttlSeconds: 60,
+    identity: ctx.user.id, room: roomName, canPublish: true, sources: videoEnabled ? [CAMERA, MIC, SCREEN_SHARE] : [MIC], ttlSeconds: 60,
     name: String(name || profile?.display_name || profile?.username || 'MilkyWay user').slice(0, 80),
     metadata: JSON.stringify({ avatar: String(profile?.avatar_url || '').slice(0, 500), callType, videoEnabled }),
   }, ctx.env);

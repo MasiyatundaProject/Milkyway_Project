@@ -21,8 +21,8 @@ export function livekitConfigurationError(environment) {
   return '';
 }
 
-export const CAMERA = 1, MIC = 2;
-const SOURCE_NAMES = { [CAMERA]: 'camera', [MIC]: 'microphone' };
+export const CAMERA = 1, MIC = 2, SCREEN_SHARE = 3;
+const SOURCE_NAMES = { [CAMERA]: 'camera', [MIC]: 'microphone', [SCREEN_SHARE]: 'screen_share' };
 
 export const livekitConfigured = environment => livekitMissingVariables(environment).length === 0;
 // Clients connect over WebSocket; an https:// project URL (as copied from the LiveKit dashboard) means the same host.
@@ -158,7 +158,7 @@ export async function retryRoomCleanups(ctx, limit = 1) {
   }
 }
 
-/** Signs a participant access token for one room. `sources` are CAMERA / MIC numbers. */
+/** Signs a participant access token for one room. `sources` are LiveKit track source numbers. */
 export function accessToken({ identity, name = '', metadata = '', room, canPublish = false, sources = [], ttlSeconds = 60 }, environment = null) {
   const now = Math.floor(Date.now() / 1000);
   return sign({
