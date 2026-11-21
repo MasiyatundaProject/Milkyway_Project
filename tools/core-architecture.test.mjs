@@ -1034,6 +1034,10 @@ test('feed videos use tap-to-show scrubbers and post photos pinch to zoom', () =
   assert.doesNotMatch(styles, /\.video-controls \{[^}]*backdrop-filter/);
   assert.match(feed, /media\.addEventListener\('pointerdown'/);
   assert.match(feed, /Math\.min\(4, imagePinch\.scale/);
+  assert.match(feed, /slide\.dataset\.fit = 'contain'/);
+  assert.match(styles, /\.media video, \.media img[^}]*object-fit: contain/);
+  assert.doesNotMatch(styles, /\.slide\[data-fit="cover"\]/);
+  assert.match(styles, /\.scope-tabs button\[aria-selected="true"\]::after[^}]*width: 26px/);
   assert.match(pager, /event\.isPrimary === false/);
   assert.match(pager, /\.image-zoomed/);
   assert.match(viewer, /pointerdown/);

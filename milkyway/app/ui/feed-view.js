@@ -294,8 +294,8 @@ export class FeedView {
       event.stopImmediatePropagation();
     }, true);
     slide._refs.resetImageZoom = resetImageZoom;
-    // Portrait media fills the screen; landscape media is letterboxed instead of cropped.
-    const fit = (w, h) => { if (w && h) slide.dataset.fit = h >= w * 1.2 ? 'cover' : 'contain'; };
+    // Keep portrait and landscape media fully visible rather than cropping tall frames.
+    const fit = (w, h) => { if (w && h) slide.dataset.fit = 'contain'; };
     video.addEventListener('loadedmetadata', () => fit(video.videoWidth, video.videoHeight));
     video.addEventListener('error', () => {
       const post = slide._post;
