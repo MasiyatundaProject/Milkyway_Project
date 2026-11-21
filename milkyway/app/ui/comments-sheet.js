@@ -15,8 +15,9 @@ export class CommentsSheet {
     this.sheet.body.append(this.list, this.form);
   }
 
-  open(post) {
+  open(post, onCommentAdded) {
     this.post = post;
+    this.onCommentAdded = onCommentAdded;
     this.off?.();
     this.list.replaceChildren(h('p', { class: 'muted center' }, t('loading')));
     this.sheet.title = `${t('comments')} · ${post.comments || 0}`;
@@ -45,6 +46,7 @@ export class CommentsSheet {
     try {
       const result = await addComment(this.post.id, body);
       actions.commentAdded(this.post.id);
+      this.onCommentAdded?.();
       if (result === 'queued') toast(t('queued'));
     } catch (error) { toast(error.message); }
   }

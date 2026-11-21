@@ -8,11 +8,13 @@ import liveRoom from '../api/milkyway-live-room.js';
 import callApi from '../api/milkyway-call.js';
 import livekitToken from '../api/milkyway-livekit-token.js';
 import { runApi } from '../api/_lib/fetch-adapter.js';
+import { savedAmong, savedList } from '../api/_lib/saves.js';
 import { accessToken, closeRoom, livekitConfigurationError, livekitConfigured, livekitUrl, livekitUsable, SCREEN_SHARE } from '../api/_lib/livekit.js';
 import { postShareResponse } from '../api/_lib/post-share.js';
 import { assertRoomAccess } from '../milkyway/app/core/livekit-access.js';
 import { identifyMediaFile, mediaInfo, openFilePicker } from '../milkyway/app/core/media-files.js';
 import { checkDeployment } from '../milkyway/app/core/update-check.js';
+import { listCreatorServices } from '../milkyway/app/data/services.js';
 
 const A = '11111111-1111-4111-8111-111111111111'; // public author
 const B = '22222222-2222-4222-8222-222222222222'; // private author
@@ -339,6 +341,64 @@ async function call(query) {
   await feed({ method: 'GET', headers: {}, query }, res);
   return { status, payload };
 }
+
+test('saved-post reads filter by the authenticated user and surface database errors', async () => {
+  const requested = [];
+  const rows = [{ post_id: P(4), created_at: '2026-11-20T10:00:00Z' }];
+  const ctx = {
+    user: { id: A },
+    rest: async path => { requested.push(path); return rows; },
+  };
+  assert.deepEqual(await savedList(ctx), [{ postId: P(4), savedAt: rows[0].created_at }]);
+  assert.match(requested[0], new RegExp(`user_id=eq\\.${A}`));
+  assert.match(requested[0], /select=post_id,created_at/);
+  assert.deepEqual([...await savedAmong(ctx, [P(4)])], [P(4)]);
+  assert.match(requested[1], new RegExp(`user_id=eq\\.${A}`));
+  await assert.rejects(savedList({ ...ctx, rest: async () => { throw new Error('schema mismatch'); } }), /schema mismatch/);
+});
+
+test('creator service reads prefer user_id/price and fall back only for the legacy schema', async () => {
+  const queries = [];
+  const sb = {
+    from(table) {
+      const query = { table, filters: [] };
+      queries.push(query);
+      query.select = fields => { query.fields = fields; return query; };
+      query.eq = (column, value) => { query.filters.push([column, value]); return query; };
+      query.order = async () => queries.length === 1
+        ? { error: { message: "Could not find the 'user_id' column in the schema cache" } }
+        : { data: [{ id: P(5), creator_id: A, title: 'Design', description: 'Portfolio service', category: 'Creative', pricing: 'from 20', created_at: '2026-11-20T10:00:00Z' }], error: null };
+      return query;
+    },
+  };
+  const services = await listCreatorServices(sb, A, { publicOnly: true });
+  assert.equal(queries[0].table, 'mw_creator_services');
+  assert.equal(queries[0].fields, 'id,user_id,title,description,price,category,created_at');
+  assert.deepEqual(queries[0].filters, [['user_id', A]]);
+  assert.equal(queries[1].fields, 'id,creator_id,title,description,pricing,category,created_at');
+  assert.deepEqual(queries[1].filters, [['creator_id', A], ['is_published', true]]);
+  assert.equal(services[0].user_id, A);
+  assert.equal(services[0].price, 'from 20');
+});
+
+test('opened post viewer refreshes and updates all four visible metrics', () => {
+  const viewer = readFileSync(new URL('../milkyway/app/ui/post-viewer.js', import.meta.url), 'utf8');
+  const main = readFileSync(new URL('../milkyway/app/main.js', import.meta.url), 'utf8');
+  const settings = readFileSync(new URL('../milkyway/app/ui/settings-view.js', import.meta.url), 'utf8');
+  assert.match(viewer, /postLikes/);
+  assert.match(viewer, /postComments/);
+  assert.match(viewer, /postShares/);
+  assert.match(viewer, /postReposts/);
+  assert.match(viewer, /eq\('kind', 'light'\)/);
+  assert.match(viewer, /eq\('kind', 'share'\)/);
+  assert.match(viewer, /mw_reposts/);
+  assert.match(viewer, /post\.likes = likes\.count/);
+  assert.match(viewer, /post\.comments = comments\.count/);
+  assert.match(viewer, /post\.shares = shares\.count/);
+  assert.match(viewer, /post\.reposts = reposts\.count/);
+  assert.doesNotMatch(main, /_counted:\s*true/);
+  assert.match(settings, /posts = ids\.map\(id => byId\.get\(id\) \|\|/);
+});
 
 test('group creation API validates join mode and delegates creation to the secure RPC', async () => {
   const originalFetch = globalThis.fetch;

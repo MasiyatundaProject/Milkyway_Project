@@ -679,9 +679,11 @@ html[data-low-end] .create-orb, html[data-low-end] .gift-card, html[data-low-end
 .pv-layer .mw-mark { left: 12px; top: calc(env(safe-area-inset-top) + 12px); }
 .pv-info { flex: none; display: grid; gap: 6px; padding: 10px 14px calc(12px + env(safe-area-inset-bottom)); max-height: 38dvh; overflow-y: auto; border-top: 1px solid var(--line); background: var(--panel); }
 .pv-caption { margin: 0; white-space: pre-line; overflow-wrap: anywhere; }
-.pv-actions { display: flex; align-items: center; gap: 14px; }
+.pv-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
 .pv-act { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; }
 .pv-act span { width: 24px; height: 24px; display: grid; place-items: center; font-size: 22px; }
+.pv-act .pv-metric { width: auto; height: auto; display: grid; gap: 2px; font-size: inherit; line-height: 1.1; text-align: left; }
+.pv-metric small { color: var(--muted); font-size: 10px; }
 .pv-act.on span { color: var(--accent); }
 .pv-delete { margin-left: auto; padding: 8px 14px; font-size: 13px; }
 

@@ -387,7 +387,14 @@ export class NovaMenu {
         const { data, error } = await sb.from('mw_posts').select('id,caption,media_url,media_type,created_at').in('id', ids);
         if (error) throw error;
         const byId = new Map((data || []).map(post => [String(post.id), post]));
-        posts = ids.map(id => byId.get(id)).filter(Boolean);
+        const savedAt = new Map(list.map(item => [String(item.postId), item.savedAt]));
+        posts = ids.map(id => byId.get(id) || {
+          id,
+          caption: t('savedUnavailable'),
+          media_url: null,
+          media_type: null,
+          created_at: savedAt.get(String(id)),
+        });
       }
       if (!posts.length) { box.replaceChildren(h('p', { class: 'muted center' }, t('noSaved'))); return; }
       box.replaceChildren(h('div', { class: 'nova-list' }, ...posts.map(post => {

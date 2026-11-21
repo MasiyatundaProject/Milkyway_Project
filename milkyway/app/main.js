@@ -46,7 +46,7 @@ const novaMenu = lazy(() => import('./ui/settings-view.js').then(m => new m.Nova
   },
 })));
 const profileView = lazy(() => import('./ui/profile-view.js').then(m => new m.ProfileView({
-  requireLogin, openCreate, openComments: post => commentsSheet().then(sheet => sheet.open(post)),
+  requireLogin, openCreate, openComments: (post, onCommentAdded) => commentsSheet().then(sheet => sheet.open(post, onCommentAdded)),
   openMenu: profile => novaMenu().then(menu => menu.open(profile)),
   openChat: person => { if (requireLogin()) inboxView().then(view => view.openWith(person)); },
 })));
@@ -55,14 +55,14 @@ const composeSheet = lazy(() => import('./ui/compose-sheet.js').then(m => new m.
 // Full-size post popup for photos tapped in the Orbit feed (the same viewer the Nova grid uses).
 const postViewer = lazy(() => import('./ui/post-viewer.js').then(m => new m.PostViewer({
   requireLogin,
-  openComments: post => commentsSheet().then(sheet => sheet.open(post)),
+  openComments: (post, onCommentAdded) => commentsSheet().then(sheet => sheet.open(post, onCommentAdded)),
 })));
 function openPost(post) {
   if (!post) return;
   playback.suspend(true);
   postViewer().then(viewer => {
-    // A copy: the popup keeps its own counts; likes still go through the shared feed actions.
-    viewer.open([{ ...post, _counted: true }], 0, { own: false, onClose: () => { if (shell.dataset.view === 'home') playback.suspend(false); } });
+    // Keep an independent object so the modal's metric refresh cannot move the feed card.
+    viewer.open([{ ...post }], 0, { own: false, onClose: () => { if (shell.dataset.view === 'home') playback.suspend(false); } });
   }).catch(() => { playback.suspend(shell.dataset.view !== 'home'); toast(t('imageUnavailable')); });
 }
 const discoveryView = lazy(() => import('./ui/discovery-view.js').then(m => new m.DiscoveryView($('exploreView'), { openProfile, openPost })));

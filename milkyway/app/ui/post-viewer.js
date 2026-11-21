@@ -1,7 +1,8 @@
 // Post detail: full-screen popup for a post tapped in a profile grid (photos, videos and text posts alike).
 // Swipe/arrow keys step through the grid; the owner can delete the post from here.
 import { t } from '../core/i18n.js';
-import { auth, supabase } from '../core/net.js';
+import { config } from '../config.js';
+import { api, auth, supabase } from '../core/net.js';
 import { setImage, image as imageUrl, poster, mediaKind } from '../core/media.js';
 import { device } from '../core/device.js';
 import { actions } from '../data/feed.js';
@@ -32,9 +33,11 @@ export class PostViewer {
     this.caption = h('p', { class: 'pv-caption' });
     this.when = h('small', { class: 'muted' });
     this.sound = h('div', { class: 'pv-sound' });
-    this.likeBtn = h('button', { class: 'pv-act', type: 'button', 'aria-label': t('like') }, h('span', { html: icon.heart }), h('b', {}, '0'));
-    this.commentBtn = h('button', { class: 'pv-act', type: 'button', 'aria-label': t('comments') }, h('span', { html: icon.comment }), h('b', {}, '0'));
-    this.shareBtn = h('button', { class: 'pv-act', type: 'button', 'aria-label': t('share') }, h('span', { html: icon.share }), h('b', {}, ''));
+    const metric = (label, value = '0') => h('span', { class: 'pv-metric' }, h('small', {}, label), h('b', {}, value));
+    this.likeBtn = h('button', { class: 'pv-act', type: 'button', 'aria-label': t('postLikes') }, h('span', { html: icon.heart }), metric(t('postLikes')));
+    this.commentBtn = h('button', { class: 'pv-act', type: 'button', 'aria-label': t('postComments') }, h('span', { html: icon.comment }), metric(t('postComments')));
+    this.shareBtn = h('button', { class: 'pv-act', type: 'button', 'aria-label': t('postShares') }, h('span', { html: icon.share }), metric(t('postShares')));
+    this.repostBtn = h('button', { class: 'pv-act', type: 'button', 'aria-label': t('postReposts') }, h('span', { 'aria-hidden': 'true' }, '↻'), metric(t('postReposts')));
     this.deleteBtn = h('button', { class: 'pill-btn danger pv-delete', type: 'button' }, t('deletePost'));
     this.prevBtn = h('button', { class: 'icon-btn pv-nav pv-prev', type: 'button', 'aria-label': t('previous'), html: '‹' });
     this.nextBtn = h('button', { class: 'icon-btn pv-nav pv-next', type: 'button', 'aria-label': t('next'), html: '›' });
@@ -42,15 +45,21 @@ export class PostViewer {
     this.root = h('div', { class: 'pv-layer', role: 'dialog', 'aria-modal': 'true', 'aria-label': t('post'), hidden: true, tabindex: '-1' },
       h('div', { class: 'pv-frame' }, this.stage, brandMark(), this.prevBtn, this.nextBtn, this.closeBtn),
       h('div', { class: 'pv-info' }, this.caption, this.when, this.sound,
-        h('div', { class: 'pv-actions' }, this.likeBtn, this.commentBtn, this.shareBtn, this.deleteBtn)));
+        h('div', { class: 'pv-actions' }, this.likeBtn, this.commentBtn, this.shareBtn, this.repostBtn, this.deleteBtn)));
     document.body.append(this.root);
 
     this.closeBtn.onclick = () => this.close();
     this.prevBtn.onclick = () => this.step(-1);
     this.nextBtn.onclick = () => this.step(1);
     this.likeBtn.onclick = () => this.#like();
-    this.commentBtn.onclick = () => { if (this.post) this.hooks.openComments?.(this.#feedShape()); };
+    this.commentBtn.onclick = () => {
+      if (this.post) this.hooks.openComments?.(this.post, () => {
+        this.post.comments = (this.post.comments || 0) + 1;
+        this.#paintCounts();
+      });
+    };
     this.shareBtn.onclick = () => this.#share();
+    this.repostBtn.onclick = () => this.#repost();
     this.#armDelete();
     this.root.addEventListener('keydown', event => {
       if (event.key === 'Escape') this.close();
@@ -237,6 +246,7 @@ export class PostViewer {
     this.nextBtn.hidden = index >= this.posts.length - 1;
     const authorId = String(post.author_id || post.author?.id || (this.own ? auth.userId : ''));
     this.deleteBtn.hidden = !(auth.userId && authorId === auth.userId);
+    this.repostBtn.disabled = !!auth.userId && authorId === auth.userId;
     this.#resetDelete();
     this.#paintCounts();
     this.#loadCounts(post);
@@ -400,6 +410,14 @@ export class PostViewer {
     this.likeBtn.setAttribute('aria-pressed', String(!!post.liked));
     this.likeBtn.querySelector('b').textContent = count(post.likes || 0);
     this.commentBtn.querySelector('b').textContent = count(post.comments || 0);
+    this.shareBtn.querySelector('b').textContent = count(post.shares || 0);
+    this.repostBtn.querySelector('b').textContent = count(post.reposts || 0);
+    this.likeBtn.setAttribute('aria-label', `${t('postLikes')}: ${count(post.likes || 0)}`);
+    this.commentBtn.setAttribute('aria-label', `${t('postComments')}: ${count(post.comments || 0)}`);
+    this.shareBtn.setAttribute('aria-label', `${t('postShares')}: ${count(post.shares || 0)}`);
+    this.repostBtn.setAttribute('aria-label', `${t('postReposts')}: ${count(post.reposts || 0)}`);
+    this.repostBtn.classList.toggle('on', !!post.reposted);
+    this.repostBtn.setAttribute('aria-pressed', String(!!post.reposted));
   }
 
   async #loadCounts(post) {
@@ -407,17 +425,35 @@ export class PostViewer {
     try {
       const sb = await supabase();
       const head = { count: 'exact', head: true };
-      const [likes, comments, mine] = await Promise.all([
+      const [likes, comments, shares, mine, mineShare] = await Promise.all([
         sb.from('mw_signals').select('post_id', head).eq('post_id', post.id).eq('kind', 'light'),
         sb.from('mw_echoes').select('post_id', head).eq('post_id', post.id),
+        sb.from('mw_signals').select('post_id', head).eq('post_id', post.id).eq('kind', 'share'),
         auth.userId ? sb.from('mw_signals').select('post_id').eq('post_id', post.id).eq('user_id', auth.userId).eq('kind', 'light').limit(1) : Promise.resolve({ data: [] }),
+        auth.userId ? sb.from('mw_signals').select('post_id').eq('post_id', post.id).eq('user_id', auth.userId).eq('kind', 'share').limit(1) : Promise.resolve({ data: [] }),
       ]);
+      for (const result of [likes, comments, shares, mine, mineShare]) if (result.error) throw result.error;
+      const repostSource = await sb.from('mw_reposts').select('original_post_id').eq('post_id', post.id).maybeSingle();
+      if (repostSource.error) throw repostSource.error;
+      const originalId = repostSource.data?.original_post_id || post.id;
+      const [reposts, mineRepost] = await Promise.all([
+        sb.from('mw_reposts').select('post_id', head).eq('original_post_id', originalId),
+        auth.userId ? sb.from('mw_reposts').select('post_id').eq('original_post_id', originalId).eq('user_id', auth.userId).limit(1) : Promise.resolve({ data: [] }),
+      ]);
+      for (const result of [reposts, mineRepost]) if (result.error) throw result.error;
       post.likes = likes.count || 0;
       post.comments = comments.count || 0;
       post.liked = !!mine.data?.length;
+      post.shares = shares.count || 0;
+      post.shared = !!mineShare.data?.length;
+      post.reposts = reposts.count || 0;
+      post.reposted = !!mineRepost.data?.length;
+      post.originalPostId = originalId;
       post._counted = true;
       if (this.post === post) this.#paintCounts();
-    } catch { /* counts stay at their last value */ }
+    } catch (error) {
+      console.warn('[post-viewer] Could not load post metrics', error);
+    }
   }
 
   #feedShape() {
@@ -442,8 +478,41 @@ export class PostViewer {
 
   async #share() {
     const post = this.post;
+    if (auth.userId && !post.shared) {
+      post.shared = true;
+      post.shares = (post.shares || 0) + 1;
+      this.#paintCounts();
+      actions.share(post).catch(error => {
+        post.shared = false;
+        post.shares = Math.max(0, post.shares - 1);
+        if (this.post === post) this.#paintCounts();
+        toast(error?.message || t('retry'));
+      });
+    }
     const url = `${location.origin}/share/${encodeURIComponent(post.id)}`;
     openShare({ title: post.author?.name || 'MilkyWay', text: (post.caption || '').slice(0, 120), url });
+  }
+
+  async #repost() {
+    const post = this.post;
+    if (!post || post.reposted || !this.hooks.requireLogin?.() || !auth.userId) return;
+    const authorId = String(post.author_id || post.author?.id || '');
+    if (authorId === auth.userId) return;
+    this.repostBtn.disabled = true;
+    try {
+      await api(`${config.api.base}/milkyway-social?action=repost&id=${encodeURIComponent(post.originalPostId || post.id)}`, { method: 'POST', timeout: 12000 });
+      post.reposted = true;
+      post.reposts = (post.reposts || 0) + 1;
+      if (this.post === post) this.#paintCounts();
+      toast(t('reposted'));
+    } catch (error) {
+      toast(error?.message || t('retry'));
+    } finally {
+      if (this.post === post) {
+        const authorId = String(post.author_id || post.author?.id || '');
+        this.repostBtn.disabled = !!auth.userId && authorId === auth.userId;
+      }
+    }
   }
 
   // Delete needs a second tap within 3 s.

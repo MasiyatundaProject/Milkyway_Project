@@ -26,12 +26,10 @@ export async function savedAmong(ctx, ids) {
     try {
       const rows = await sql`SELECT post_id FROM mw_post_saves WHERE user_id = ${me} AND post_id = ANY(${list}::uuid[])`;
       return new Set(rows.map(row => String(row.post_id)));
-    } catch { return new Set(); }
+    } catch (error) { throw new ApiError(503, error?.message || 'Saved posts are unavailable right now.'); }
   }
-  try {
-    const rows = await ctx.rest(`mw_saves?user_id=${eq(me)}&post_id=${inList(list)}&select=post_id`);
-    return new Set((rows || []).map(row => String(row.post_id)));
-  } catch { return new Set(); }
+  const rows = await ctx.rest(`mw_saves?user_id=${eq(me)}&post_id=${inList(list)}&select=post_id`);
+  return new Set((rows || []).map(row => String(row.post_id)));
 }
 
 /** Saves (on = true) or unsaves a post the caller can see. Idempotent. */
@@ -64,6 +62,6 @@ export async function savedList(ctx, limit = 200) {
     const rows = await sql`SELECT post_id, created_at FROM mw_post_saves WHERE user_id = ${me} ORDER BY created_at DESC LIMIT ${limit}`;
     return rows.map(row => ({ postId: String(row.post_id), savedAt: row.created_at }));
   }
-  const rows = await ctx.rest(`mw_saves?user_id=${eq(me)}&select=post_id,created_at&order=created_at.desc&limit=${limit}`).catch(() => []);
+  const rows = await ctx.rest(`mw_saves?user_id=${eq(me)}&select=post_id,created_at&order=created_at.desc&limit=${limit}`);
   return (rows || []).map(row => ({ postId: String(row.post_id), savedAt: row.created_at }));
 }

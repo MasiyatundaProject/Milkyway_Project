@@ -2,9 +2,9 @@ import { config } from '../config.js';
 import { t } from '../core/i18n.js';
 import { api, auth, supabase } from '../core/net.js';
 import { actions } from '../data/feed.js';
+import { deleteCreatorService, insertCreatorService, listCreatorServices, updateCreatorService } from '../data/services.js';
 import { ago, count, formatDateTime, h, toast } from './dom.js';
 
-const SERVICE_FIELDS = 'id,creator_id,title,category,description,pricing,created_at';
 const clean = value => String(value || '').trim();
 const message = (parent, error) => {
   parent.replaceChildren(h('p', { class: 'muted center', role: 'status' }, error?.message || t('retry')));
@@ -249,14 +249,13 @@ export class StudioView {
 
   async #business(content) {
     const sb = await supabase();
-    const [servicesResult, inquiriesResult, requestsResult] = await Promise.all([
-      sb.from('mw_creator_services').select(SERVICE_FIELDS).eq('creator_id', auth.userId).order('created_at', { ascending: false }),
+    const [services, inquiriesResult, requestsResult] = await Promise.all([
+      listCreatorServices(sb, auth.userId),
       sb.from('mw_service_inquiries').select('id,service_id,client_name,message,preferred_at,status,creator_reply,created_at,service:mw_creator_services(title)')
         .eq('creator_id', auth.userId).order('created_at', { ascending: false }).limit(100),
       sb.from('mw_service_inquiries').select('id,message,preferred_at,status,creator_reply,created_at,service:mw_creator_services(title)')
         .eq('requester_id', auth.userId).order('created_at', { ascending: false }).limit(100),
     ]);
-    if (servicesResult.error) throw servicesResult.error;
     if (inquiriesResult.error) throw inquiriesResult.error;
     if (requestsResult.error) throw requestsResult.error;
 
@@ -271,14 +270,12 @@ export class StudioView {
       submit.disabled = true;
       notice.textContent = t('loading');
       try {
-        const { error } = await sb.from('mw_creator_services').insert({
-          creator_id: auth.userId,
+        await insertCreatorService(sb, auth.userId, {
           title: clean(title.value),
           category: clean(category.value),
-          pricing: clean(pricing.value),
+          price: clean(pricing.value),
           description: clean(description.value),
         });
-        if (error) throw error;
         toast(t('studioServiceAdded'));
         this.#show('business');
       } catch (error) {
@@ -288,10 +285,10 @@ export class StudioView {
     } }, title, category, pricing, description,
     h('button', { class: 'pill-btn hot', type: 'submit' }, t('studioAddService')), notice);
 
-    const services = (servicesResult.data || []).map(service => h('article', { class: 'mw-studio-service-card' },
+    const serviceCards = services.map(service => h('article', { class: 'mw-studio-service-card' },
       h('div', {}, h('small', { class: 'mw-studio-eyebrow' }, service.category),
         h('h4', {}, service.title), h('p', { class: 'muted' }, service.description),
-        service.pricing ? h('b', { class: 'mw-studio-price' }, service.pricing) : null),
+        service.price !== '' && service.price != null ? h('b', { class: 'mw-studio-price' }, service.price) : null),
       h('div', { class: 'mw-studio-service-actions' },
         h('button', { class: 'pill-btn', type: 'button', onclick: event => this.#editService(service, event.currentTarget.closest('.mw-studio-service-card')) }, t('update')),
         h('button', { class: 'pill-btn danger', type: 'button', onclick: () => this.#removeService(service.id) }, t('remove')))));
@@ -309,7 +306,7 @@ export class StudioView {
         h('div', {}, h('h3', {}, t('studioBusiness')), h('p', { class: 'muted' }, t('studioBusinessHint')))),
       h('section', { class: 'mw-studio-panel' }, h('h4', {}, t('studioAddService')), form),
       h('section', { class: 'mw-studio-panel' }, h('h4', {}, t('studioPortfolio')),
-        services.length ? h('div', { class: 'mw-studio-service-list' }, ...services) : h('p', { class: 'muted' }, t('studioNoServices'))),
+        serviceCards.length ? h('div', { class: 'mw-studio-service-list' }, ...serviceCards) : h('p', { class: 'muted' }, t('studioNoServices'))),
       h('section', { class: 'mw-studio-panel' }, h('h4', {}, t('studioInquiries')),
         inquiries.length ? h('div', { class: 'mw-studio-inquiry-list' }, ...inquiries) : h('p', { class: 'muted' }, t('studioNoInquiries'))),
       h('section', { class: 'mw-studio-panel' }, h('h4', {}, t('studioMyRequests')),
@@ -352,8 +349,7 @@ export class StudioView {
     if (!confirm(t('studioRemoveServiceConfirm'))) return;
     try {
       const sb = await supabase();
-      const { error } = await sb.from('mw_creator_services').delete().eq('id', id).eq('creator_id', auth.userId);
-      if (error) throw error;
+      await deleteCreatorService(sb, auth.userId, id);
       toast(t('remove'));
       this.#show('business');
     } catch (error) {
@@ -364,7 +360,7 @@ export class StudioView {
   #editService(service, card) {
     const title = h('input', { class: 'field', minlength: '2', maxlength: '80', value: service.title, required: true });
     const category = h('input', { class: 'field', minlength: '2', maxlength: '60', value: service.category, required: true });
-    const pricing = h('input', { class: 'field', maxlength: '100', value: service.pricing || '' });
+    const pricing = h('input', { class: 'field', maxlength: '100', value: service.price ?? '' });
     const description = h('textarea', { class: 'field area', minlength: '10', maxlength: '1000', required: true }, service.description);
     const note = h('p', { class: 'muted', role: 'status' });
     const form = h('form', { class: 'mw-studio-service-form', onsubmit: async event => {
@@ -373,14 +369,12 @@ export class StudioView {
         save.disabled = true;
         try {
           const sb = await supabase();
-          const { error } = await sb.from('mw_creator_services').update({
+          await updateCreatorService(sb, auth.userId, service.id, {
             title: clean(title.value),
             category: clean(category.value),
-            pricing: clean(pricing.value),
+            price: clean(pricing.value),
             description: clean(description.value),
-            updated_at: new Date().toISOString(),
-          }).eq('id', service.id).eq('creator_id', auth.userId);
-          if (error) throw error;
+          });
           toast(t('settingsSaved'));
           this.#show('business');
         } catch (error) {

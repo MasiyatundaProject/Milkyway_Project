@@ -3,13 +3,14 @@ import { extraLocales } from './locales.js';
 
 const strings = {
   en: {
-    requestTimeout: 'The connection is slow. Check your network and try again.', callServiceError: 'Could not connect to the call service. Check your connection or try again.', callServiceLimited: 'The call service has reached a usage limit. Please try again later.', savedPosts: 'Saved posts', noSaved: 'No saved posts yet', unsave: 'Remove',
+    requestTimeout: 'The connection is slow. Check your network and try again.', callServiceError: 'Could not connect to the call service. Check your connection or try again.', callServiceLimited: 'The call service has reached a usage limit. Please try again later.', savedPosts: 'Saved posts', noSaved: 'No saved posts yet', savedUnavailable: 'Saved post is unavailable', unsave: 'Remove',
     forYou: 'For You', following: 'Following', live: 'LIVE', home: 'Orbit', create: 'Create', inbox: 'Messages', me: 'Nova', explore: 'Explore',
     exploreSearch: 'Search people, posts, #hashtags, sounds', exploreAll: 'All', explorePeople: 'People', exploreTags: 'Hashtags', exploreSounds: 'Sounds',
     exploreTrending: 'Trending hashtags', exploreNew: 'New posts', exploreResults: 'Posts', explorePeopleHint: 'Search people by name or @username',
     exploreLoadFailed: 'Could not load discovery content. Check your connection and retry.', exploreNoSounds: 'No sounds found in recent posts',
     explorePlaySound: 'Play original sound', exploreOriginalSound: 'Original sound', explorePost: 'Open post',
     tapForSound: 'Tap for sound', offline: 'Offline · showing saved posts', backOnline: 'Back online', empty: 'No posts yet. Be the first to post!',
+    postLikes: 'Likes', postComments: 'Comments', postShares: 'Shares', postReposts: 'Reposts', reposted: 'Reposted to your feed.',
     emptyFollowing: 'Follow creators to fill this feed', feedLoadFailed: 'Could not load posts. Check your connection and try again.', retry: 'Retry', loading: 'Loading…', comments: 'Comments',
     addComment: 'Add a comment…', send: 'Send', signIn: 'Sign in', signUp: 'Sign up', signInToContinue: 'Sign in to continue', email: 'Email',
     password: 'Password', createAccount: 'Create account', haveAccount: 'Already have an account? Sign in', confirmPassword: 'Confirm password',
@@ -186,13 +187,14 @@ const strings = {
   removeAttachment: 'Remove attachment', attachment: 'Attachment',
   },
   sw: {
-    requestTimeout: 'Mtandao uko polepole. Angalia muunganisho wako na ujaribu tena.', callServiceError: 'Imeshindikana kuunganisha huduma ya simu. Angalia mtandao au ujaribu tena.', callServiceLimited: 'Huduma ya simu imefikia kikomo cha matumizi. Tafadhali jaribu tena baadaye.', savedPosts: 'Post zilizohifadhiwa', noSaved: 'Bado hujahifadhi post yoyote', unsave: 'Ondoa',
+    requestTimeout: 'Mtandao uko polepole. Angalia muunganisho wako na ujaribu tena.', callServiceError: 'Imeshindikana kuunganisha huduma ya simu. Angalia mtandao au ujaribu tena.', callServiceLimited: 'Huduma ya simu imefikia kikomo cha matumizi. Tafadhali jaribu tena baadaye.', savedPosts: 'Post zilizohifadhiwa', noSaved: 'Bado hujahifadhi post yoyote', savedUnavailable: 'Post iliyohifadhiwa haipatikani', unsave: 'Ondoa',
     forYou: 'Kwa Ajili Yako', following: 'Unaowafuata', live: 'LIVE', home: 'Orbit', create: 'Tengeneza', inbox: 'Ujumbe', me: 'Nova', explore: 'Gundua',
     exploreSearch: 'Tafuta watu, machapisho, #hashtag na sauti', exploreAll: 'Zote', explorePeople: 'Watu', exploreTags: 'Hashtag', exploreSounds: 'Sauti',
     exploreTrending: 'Hashtag zinazovuma', exploreNew: 'Machapisho mapya', exploreResults: 'Machapisho', explorePeopleHint: 'Tafuta watu kwa jina au @jina_la_mtumiaji',
     exploreLoadFailed: 'Maudhui ya ugunduzi hayakupatikana. Angalia mtandao kisha ujaribu tena.', exploreNoSounds: 'Hakuna sauti kwenye machapisho ya hivi karibuni',
     explorePlaySound: 'Cheza sauti asilia', exploreOriginalSound: 'Sauti asilia', explorePost: 'Fungua chapisho',
     tapForSound: 'Gusa kupata sauti', offline: 'Nje ya mtandao · machapisho yaliyohifadhiwa', backOnline: 'Umerudi mtandaoni', empty: 'Bado hakuna machapisho. Kuwa wa kwanza kuchapisha!',
+    postLikes: 'Likes', postComments: 'Maoni', postShares: 'Shiriki', postReposts: 'Reposts', reposted: 'Imechapishwa tena kwenye ukurasa wako.',
     emptyFollowing: 'Fuata watu ili kujaza ukurasa huu', feedLoadFailed: 'Machapisho hayakupakia. Angalia mtandao ujaribu tena.', retry: 'Jaribu tena', loading: 'Inapakia…', comments: 'Maoni',
     addComment: 'Andika maoni…', send: 'Tuma', signIn: 'Ingia', signInToContinue: 'Ingia kuendelea', email: 'Barua pepe',
     password: 'Nenosiri', createAccount: 'Fungua akaunti', haveAccount: 'Una akaunti tayari? Ingia', confirmPassword: 'Thibitisha nenosiri',

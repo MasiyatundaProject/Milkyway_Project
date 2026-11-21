@@ -7,6 +7,7 @@ import { optimizeImage } from '../core/media-optimizer.js';
 import { setImage, poster } from '../core/media.js';
 import { profiles } from '../data/profiles.js';
 import { actions } from '../data/feed.js';
+import { listCreatorServices } from '../data/services.js';
 import { Sheet } from './sheet.js';
 import { h, icon, avatar, count, toast } from './dom.js';
 import { PostViewer, postKind } from './post-viewer.js';
@@ -98,7 +99,7 @@ export class ProfileView {
   #viewer() {
     return this.viewer ||= new PostViewer({
       requireLogin: () => this.hooks.requireLogin(),
-      openComments: post => this.hooks.openComments?.(post),
+      openComments: (post, onCommentAdded) => this.hooks.openComments?.(post, onCommentAdded),
       onDeleted: post => this.#removed(post),
     });
   }
@@ -206,10 +207,7 @@ export class ProfileView {
     let section;
     try {
       const sb = await supabase();
-      const { data, error } = await sb.from('mw_creator_services')
-        .select('id,title,category,description,pricing')
-        .eq('creator_id', profile.id).eq('is_published', true).order('created_at', { ascending: false });
-      if (error) throw error;
+      const data = await listCreatorServices(sb, profile.id, { publicOnly: true });
       if (token !== this.token || this.mode !== 'profile' || !data?.length) return;
       section = h('section', { class: 'mw-profile-services' },
         h('h3', {}, t('studioPortfolio')),
@@ -227,7 +225,7 @@ export class ProfileView {
     const card = h('article', { class: 'mw-studio-service-card' },
       h('div', {}, h('small', { class: 'mw-studio-eyebrow' }, service.category),
         h('h4', {}, service.title), h('p', { class: 'muted' }, service.description),
-        service.pricing ? h('b', { class: 'mw-studio-price' }, service.pricing) : null));
+        service.price !== '' && service.price != null ? h('b', { class: 'mw-studio-price' }, service.price) : null));
     if (this.own || !auth.signedIn()) return card;
     const button = h('button', { class: 'pill-btn hot', type: 'button', onclick: () => {
       const note = h('p', { class: 'muted', role: 'status' });

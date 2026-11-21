@@ -154,6 +154,11 @@ const friendly = error => {
 registerOp('like', ownOp(op => op.on
   ? rest('mw_signals?on_conflict=post_id,user_id,kind', { method: 'POST', prefer: 'resolution=ignore-duplicates,return=minimal', body: { post_id: op.post, user_id: op.user, kind: 'light' } })
   : rest(`mw_signals?post_id=eq.${op.post}&user_id=eq.${op.user}&kind=eq.light`, { method: 'DELETE' })));
+// A unique share signal per signed-in user and post records the share intent once.
+registerOp('share', ownOp(op => rest('mw_signals?on_conflict=post_id,user_id,kind', {
+  method: 'POST', prefer: 'resolution=ignore-duplicates,return=minimal',
+  body: { post_id: op.post, user_id: op.user, kind: 'share' },
+})));
 // Saves go through the site API (it checks the session and stores them server-side), so they never hit the
 // Supabase row-level security error 'new row violates row-level security policy for table "mw_saves"'.
 registerOp('save', ownOp(op => api(`${config.api.feed}?action=save`, { method: 'POST', body: { post: op.post, on: op.on }, timeout: 12000 })));
@@ -168,6 +173,16 @@ export const actions = {
     const previous = snapshotPost(post.id, ['liked', 'likes']);
     updatePost(post.id, current => ({ liked: on, likes: Math.max(0, current.likes + (on === current.liked ? 0 : on ? 1 : -1)) }));
     return perform('like', { post: post.id, user, on }).catch(error => {
+      restorePost(post.id, previous);
+      throw friendly(error);
+    });
+  },
+  share(post) {
+    const user = auth.userId;
+    if (!user) return Promise.resolve('skipped');
+    const previous = snapshotPost(post.id, ['shared', 'shares']);
+    updatePost(post.id, current => ({ shared: true, shares: (current.shares || 0) + 1 }));
+    return perform('share', { post: post.id, user }).catch(error => {
       restorePost(post.id, previous);
       throw friendly(error);
     });
