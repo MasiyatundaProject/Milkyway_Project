@@ -37,7 +37,7 @@ begin
       from public.mw_messages message
       where (message.sender_id = p_user and message.receiver_id = other_user)
         or (message.sender_id = other_user and message.receiver_id = p_user)
-    );
+    ) or public.mw_dm_contact_allowed(p_user, other_user);
   end if;
   if channel_parts[2] = 'group' then
     if array_length(channel_parts, 1) <> 3

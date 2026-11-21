@@ -113,6 +113,11 @@ export class WatchParty {
       : `mw-watch:group:${this.roomId}`;
     const client = await supabase();
     if (generation !== this.roomGeneration) return;
+    const { data: { session }, error: sessionError } = await client.auth.getSession();
+    if (sessionError) throw sessionError;
+    if (!session?.access_token || session.user?.id !== auth.userId) throw new Error(t('watchConnectFailed'));
+    await client.realtime.setAuth(session.access_token);
+    if (generation !== this.roomGeneration) return;
     const channel = client.channel(topic, {
       config: { private: true, broadcast: { ack: true, self: false }, presence: { key: auth.userId } },
     });
@@ -126,12 +131,17 @@ export class WatchParty {
         if (generation !== this.roomGeneration) return resolve();
         reject(new Error(t('watchConnectFailed')));
       }, 12_000);
-      channel.subscribe(async status => {
+      channel.subscribe(async (status, error) => {
         if (generation !== this.roomGeneration) { clearTimeout(timeout); resolve(); return; }
         if (status === 'SUBSCRIBED') {
           try {
             const result = await channel.track({ userId: auth.userId, party: this.party || null });
-            if (result !== 'ok') throw new Error(t('watchConnectFailed'));
+            if (generation !== this.roomGeneration || this.channel !== channel) {
+              clearTimeout(timeout);
+              resolve();
+              return;
+            }
+            if (result !== 'ok') throw new Error(`${t('watchConnectFailed')} (${result})`);
             this.connected = true;
             this.startButton.disabled = false;
             this.endButton.disabled = false;
@@ -148,9 +158,15 @@ export class WatchParty {
           this.startButton.disabled = true;
           this.endButton.disabled = true;
           this.takeControl.disabled = true;
-          this.status.textContent = t('watchConnectFailed');
+          const errorText = `${error?.status || ''} ${error?.message || String(error || '')}`;
+          const accessDenied = /(?:401|403|unauthori[sz]ed|forbidden|not authorized|permission denied)/i.test(errorText);
+          const message = accessDenied ? t('watchAccessDenied') : t('watchConnectFailed');
+          this.status.textContent = message;
+          console.warn('[watch-party] private channel subscription failed', {
+            topic, status, message: error?.message || String(error || ''),
+          });
           clearTimeout(timeout);
-          reject(new Error(t('watchConnectFailed')));
+          reject(new Error(message));
         }
       });
     }).catch(error => {
@@ -280,13 +296,13 @@ export class WatchParty {
   async #sendEvent(payload) {
     if (!this.channel) throw new Error(t('watchConnectFailed'));
     const result = await this.channel.send({ type: 'broadcast', event: 'watch-party', payload });
-    if (result?.status !== 'ok') throw new Error(t('watchSyncFailed'));
+    if (result !== 'ok') throw new Error(`${t('watchSyncFailed')} (${result})`);
   }
 
   async #trackParty(party) {
     if (!this.channel) return;
     const result = await this.channel.track({ userId: auth.userId, party });
-    if (result !== 'ok') throw new Error(t('watchSyncFailed'));
+    if (result !== 'ok') throw new Error(`${t('watchSyncFailed')} (${result})`);
   }
 
   async #startParty() {

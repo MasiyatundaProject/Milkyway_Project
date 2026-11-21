@@ -157,11 +157,20 @@ test('Watch Together synchronizes authorized chat playback and cleans up its pla
   const direct = readFileSync(new URL('../milkyway/app/ui/inbox-view.js', import.meta.url), 'utf8');
   const group = readFileSync(new URL('../milkyway/app/ui/group-view.js', import.meta.url), 'utf8');
   const migration = readFileSync(new URL('../supabase/migrations/20261209_milkyway_watch_party.sql', import.meta.url), 'utf8');
+  const forwardMigration = readFileSync(new URL('../supabase/migrations/20261216_milkyway_watch_party_dm_access.sql', import.meta.url), 'utf8');
   const repair = readFileSync(new URL('../supabase/milkyway-schema-repair.sql', import.meta.url), 'utf8');
   const worker = readFileSync(new URL('../milkyway/sw.js', import.meta.url), 'utf8');
   assert.ok(watch.includes("`mw-watch:dm:${[auth.userId, this.roomId].sort().join(':')}`"));
   assert.match(watch, /\.on\('broadcast', \{ event: 'watch-party' \}/);
   assert.match(watch, /'play', 'pause', 'seek', 'sync'/);
+  assert.match(watch, /const result = await channel\.track\(\{ userId: auth\.userId, party: this\.party \|\| null \}\)/);
+  assert.match(watch, /if \(result !== 'ok'\) throw new Error\(`\$\{t\('watchConnectFailed'\)\}/);
+  assert.match(watch, /const result = await this\.channel\.send\(/);
+  assert.match(watch, /if \(result !== 'ok'\) throw new Error\(`\$\{t\('watchSyncFailed'\)\}/);
+  assert.match(watch, /const result = await this\.channel\.track\(\{ userId: auth\.userId, party \}\)/);
+  assert.match(watch, /generation !== this\.roomGeneration \|\| this\.channel !== channel/);
+  assert.match(watch, /private channel subscription failed/);
+  assert.match(watch, /client\.realtime\.setAuth\(session\.access_token\)/);
   assert.match(watch, /youtube-nocookie\.com\/embed/);
   assert.match(watch, /removeChannel\(channel\)/);
   assert.match(watch, /player\.pause\(\)[\s\S]*player\.removeAttribute\('src'\)/);
@@ -172,7 +181,11 @@ test('Watch Together synchronizes authorized chat playback and cleans up its pla
   assert.match(migration, /mw_watch_party_channel_access/);
   assert.match(migration, /realtime\.messages/);
   assert.match(migration, /mw_dm_is_group_member/);
+  assert.match(migration, /mw_dm_contact_allowed\(p_user, other_user\)/);
+  assert.match(forwardMigration, /mw_dm_contact_allowed\(p_user, other_user\)/);
   assert.match(repair, /20261209_milkyway_watch_party\.sql/);
+  assert.match(repair, /20261216_milkyway_watch_party_dm_access\.sql/);
+  assert.match(repair, /mw_dm_contact_allowed\(p_user, other_user\)/);
   assert.match(worker, /ui\/watch-party\.js/);
 });
 
