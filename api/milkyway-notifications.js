@@ -59,17 +59,26 @@ async function loadUnreadMessages(ctx) {
 }
 
 async function loadUnreadGroupMessages(ctx) {
-  const members = await ctx.rest(`mw_dm_group_members?select=group_id,role,join_status,joined_at,last_read_at,mw_dm_groups(name)&user_id=${eq(ctx.user.id)}&limit=500`);
+  const members = await ctx.rest(`mw_dm_group_members?select=group_id,role,join_status,joined_at,mw_dm_groups(name)&user_id=${eq(ctx.user.id)}&limit=500`);
   const active = (members || []).filter(member => ['active', 'approved'].includes(String(member.join_status || '').toLowerCase())
     || ['admin', 'co_admin', 'owner'].includes(String(member.role || '').toLowerCase()));
   if (!active.length) return [];
+  const groupIds = active.map(member => member.group_id);
+  const ids = groupIds.map(id => encodeURIComponent(id)).join(',');
+  let reads = [];
+  try {
+    reads = await ctx.rest(`mw_dm_group_reads?select=group_id,read_at&user_id=${eq(ctx.user.id)}&group_id=in.(${ids})&limit=${groupIds.length}`);
+  } catch (error) {
+    if (!isMissingSchema(error)) throw error;
+    console.warn('[notifications] Group read-state table is unavailable; group unread alerts are temporarily omitted.');
+    return [];
+  }
+  const readAt = new Map((reads || []).map(row => [row.group_id, row.read_at]));
   const groupMap = new Map(active.map(member => [member.group_id, {
     name: member.mw_dm_groups?.name || 'Group chat',
-    since: member.last_read_at || member.joined_at || '1970-01-01T00:00:00.000Z',
+    since: readAt.get(member.group_id) || member.joined_at || '1970-01-01T00:00:00.000Z',
   }]));
-  const groupIds = [...groupMap.keys()];
   const oldest = [...groupMap.values()].reduce((value, item) => Date.parse(item.since) < Date.parse(value) ? item.since : value, '9999-12-31T23:59:59.999Z');
-  const ids = groupIds.map(id => encodeURIComponent(id)).join(',');
   const rows = await pages(ctx, `mw_dm_group_messages?select=id,group_id,created_at&group_id=in.(${ids})&sender_id=neq.${encodeURIComponent(ctx.user.id)}&created_at=gt.${encodeURIComponent(oldest)}&order=created_at.asc,id.asc`);
   const counts = new Map();
   for (const row of rows) {

@@ -861,10 +861,29 @@ export class LiveView {
     const comments = choices('gl-grid', t('comments2'), [['everyone', t('commentsEveryone')], ['followers', t('commentsFollowers')], ['off', t('commentsOff')]]);
     const group = (emoji, label, node) => h('div', { class: 'gl-group' }, h('small', { class: 'gl-label' }, h('span', { 'aria-hidden': 'true' }, emoji), label), node);
     const start = h('button', { class: 'gl-start', type: 'submit' }, h('i', { class: 'gl-dot', 'aria-hidden': 'true' }), t('goLive'));
-    sheet.body.append(h('form', { class: 'gl-form', onsubmit: event => {
+    let requestingPermissions = false;
+    sheet.body.append(h('form', { class: 'gl-form', onsubmit: async event => {
       event.preventDefault();
+      if (requestingPermissions) return;
+      requestingPermissions = true;
+      start.disabled = true;
+      if (mode.value === 'video') {
+        let permissionStream;
+        try {
+          permissionStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        } catch (error) {
+          console.warn('[live] Camera and microphone permission was not granted.', error);
+          toast(error?.name === 'NotAllowedError' || error?.name === 'SecurityError'
+            ? t('livePermissionDenied') : error?.message || t('cameraNeeded'));
+          requestingPermissions = false;
+          start.disabled = false;
+          return;
+        } finally {
+          permissionStream?.getTracks().forEach(track => track.stop());
+        }
+      }
       sheet.close();
-      this.#broadcast(title.value.trim(), mode.value, { admission: guests.value, comments: comments.value });
+      void this.#broadcast(title.value.trim(), mode.value, { admission: guests.value, comments: comments.value });
     } },
     h('div', { class: 'gl-head' }, avatar(me, 36), title),
     h('div', { class: 'gl-mode-row' }, mode),

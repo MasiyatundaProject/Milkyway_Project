@@ -290,11 +290,25 @@ test('Hosted API routes dispatch DM video-call tokens to the configured LiveKit 
     assert.equal(claims.video.canPublish, true);
     assert.equal(claims.video.canSubscribe, true);
     assert.equal(claims.video.canPublishData, true);
-    assert.deepEqual(claims.video.canPublishSources, ['camera', 'microphone']);
+    assert.deepEqual(claims.video.canPublishSources, ['camera', 'microphone', 'screen_share']);
     assert.equal(claims.exp - claims.iat, CALL_TOKEN_TTL_SECONDS);
     assert.ok(claims.nbf <= claims.iat);
     assert.equal(response.headers.get('cache-control'), 'no-store');
     assert.deepEqual(JSON.parse(claims.metadata), { avatar: '', callType: 'video', videoEnabled: true });
+    call.offer = { mode: 'audio', callType: 'audio', videoEnabled: false };
+    const audioResponse = await runApi('milkyway-call', new Request('https://www.masiyatunda.com/api/milkyway-call?action=token', {
+      method: 'POST',
+      headers: { authorization: '******', apikey: 'test-public-key', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: callId, name: 'Caller' }),
+    }), {
+      LIVEKIT_URL: 'wss://binding-live.example.test',
+      LIVEKIT_API_KEY: 'binding-key',
+      LIVEKIT_API_SECRET: 'binding-secret',
+    });
+    const audioPayload = await audioResponse.json();
+    const audioClaims = JSON.parse(Buffer.from(audioPayload.token.split('.')[1], 'base64url'));
+    assert.equal(audioPayload.callType, 'audio');
+    assert.deepEqual(audioClaims.video.canPublishSources, ['camera', 'microphone', 'screen_share']);
     const missingResponse = await runApi('milkyway-call', new Request('https://www.masiyatunda.com/api/milkyway-call?action=start', {
       method: 'POST',
       headers: { authorization: 'Bearer test-session', apikey: 'test-public-key', 'Content-Type': 'application/json' },
@@ -413,6 +427,10 @@ test('notification activity supports legacy LIVE alerts and badges direct and gr
   const groupView = readFileSync(new URL('../milkyway/app/ui/group-view.js', import.meta.url), 'utf8');
   const shell = readFileSync(new URL('../milkyway/index.html', import.meta.url), 'utf8');
   const styles = readFileSync(new URL('../milkyway/app/app.css', import.meta.url), 'utf8');
+  assert.doesNotMatch(api, /last_read_at/);
+  assert.match(api, /mw_dm_group_members\?select=group_id,role,join_status,joined_at,mw_dm_groups\(name\)/);
+  assert.match(api, /mw_dm_group_reads\?select=group_id,read_at/);
+  assert.match(api, /Group read-state table is unavailable/);
   assert.doesNotMatch(api, /mw_live_alerts[^`\n]*select=id/i);
   assert.match(api, /select=room_name,host_id,host_name,title,created_at,read_at/);
   assert.match(api, /select=room,host_id,host_name,title,created_at,read_at/);
@@ -423,7 +441,8 @@ test('notification activity supports legacy LIVE alerts and badges direct and gr
   assert.match(api, /loadCallAlerts/);
   assert.match(api, /dmUnread: \{ \.\.\.dmUnread, total:/);
   assert.match(migration, /add column if not exists read_at timestamptz/);
-  assert.match(migration, /add column if not exists last_read_at timestamptz/);
+  assert.match(migration, /create table if not exists public\.mw_dm_group_reads/);
+  assert.doesNotMatch(migration, /last_read_at/);
   assert.match(migration, /mw_dm_group_mark_read/);
   assert.match(migration, /mw_dm_call_notification_read/);
   assert.match(repair, /20261215_milkyway_notification_read_state\.sql/);
@@ -437,6 +456,29 @@ test('notification activity supports legacy LIVE alerts and badges direct and gr
   assert.match(groupView, /markGroupRead\(groupId\)/);
   assert.match(shell, /id="dmUnread"/);
   assert.match(styles, /\.dm-unread/);
+});
+
+test('DM call tokens allow camera, microphone, and screen share across signing paths', () => {
+  const callApi = readFileSync(new URL('../api/milkyway-call.js', import.meta.url), 'utf8');
+  const tokenApi = readFileSync(new URL('../api/milkyway-livekit-token.js', import.meta.url), 'utf8');
+  const mediaAuthorize = readFileSync(new URL('../api/milkyway-media-authorize.js', import.meta.url), 'utf8');
+  const helper = readFileSync(new URL('../api/_lib/livekit.js', import.meta.url), 'utf8');
+  const edge = readFileSync(new URL('../supabase/functions/_shared/milkyway-token.ts', import.meta.url), 'utf8');
+  assert.match(callApi, /sources: \[CAMERA, MIC, SCREEN_SHARE\]/);
+  assert.match(tokenApi, /sources: \[CAMERA, MIC, SCREEN_SHARE\]/);
+  assert.match(mediaAuthorize, /const sources = \[CAMERA, MIC, SCREEN_SHARE\]/);
+  assert.match(helper, /\[SCREEN_SHARE\]: 'screen_share'/);
+  assert.match(edge, /body\.role === 'call' \? \[1, 2, 3\]/);
+  assert.match(edge, /!\[1, 2, 3\]\.includes\(source\)/);
+});
+
+test('starting a video LIVE requests camera and microphone before broadcasting', () => {
+  const liveView = readFileSync(new URL('../milkyway/app/ui/live-view.js', import.meta.url), 'utf8');
+  assert.match(liveView, /mode\.value === 'video'/);
+  assert.match(liveView, /getUserMedia\(\{ video: true, audio: true \}\)/);
+  assert.match(liveView, /permissionStream\?\.getTracks\(\)\.forEach\(track => track\.stop\(\)\)/);
+  assert.match(liveView, /livePermissionDenied/);
+  assert.match(liveView, /void this\.#broadcast/);
 });
 
 function fakeSupabase(routes) {

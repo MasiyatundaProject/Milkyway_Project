@@ -105,7 +105,14 @@ export async function milkywayToken(request: Request) {
         return json({ token: await token.toJwt(), serverUrl, roomName, room: roomName });
       }
       const token = new AccessToken(apiKey!, apiSecret!, { identity: account.id, name: String(body.name || 'MilkyWay user').slice(0, 80), ttl: '1m' });
-      token.addGrant({ roomJoin: true, room: roomName, canSubscribe: true, canPublish, canPublishData: true, canPublishSources: canPublish ? audioOnly ? [2] : [1, 2] : [] });
+      token.addGrant({
+        roomJoin: true,
+        room: roomName,
+        canSubscribe: true,
+        canPublish,
+        canPublishData: true,
+        canPublishSources: canPublish ? body.role === 'call' ? [1, 2, 3] : audioOnly ? [2] : [1, 2] : [],
+      });
       return json({ token: await token.toJwt(), serverUrl, roomName, room: roomName, callType: audioOnly ? 'audio' : 'video', videoEnabled: !audioOnly });
     }
     if (!/^mw-conversation-(audio|video)-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(roomName)) return json({ error: 'Invalid conversation room.' }, 400);
@@ -117,7 +124,7 @@ export async function milkywayToken(request: Request) {
     const grant = await response.json();
     if (grant.roomName !== roomName || action !== 'end' && (!grant.permissions || grant.identity !== (action === 'sync' ? target : account.id))) return json({ error: 'Invalid room authorization response.' }, 503);
     const permissions = action === 'end' ? null : { canSubscribe: true, canPublishData: false, canPublish: grant.permissions.canPublish === true, canPublishSources: grant.permissions.canPublishSources };
-    if (permissions && (!Array.isArray(permissions.canPublishSources) || permissions.canPublishSources.some((source: number) => ![1, 2].includes(source)))) return json({ error: 'Invalid room media permissions.' }, 503);
+    if (permissions && (!Array.isArray(permissions.canPublishSources) || permissions.canPublishSources.some((source: number) => ![1, 2, 3].includes(source)))) return json({ error: 'Invalid room media permissions.' }, 503);
     if (action === 'token') {
       const token = new AccessToken(apiKey!, apiSecret!, { identity: account.id, name: grant.name, metadata: JSON.stringify({ avatar: grant.avatar || '' }), ttl: '1m' });
       token.addGrant({ roomJoin: true, room: roomName, ...permissions });

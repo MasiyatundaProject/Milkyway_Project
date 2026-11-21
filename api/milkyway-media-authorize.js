@@ -1,6 +1,7 @@
 import { route, ApiError, requireUuid } from './_lib/supa.js';
 
 const ROOM = /^mw-conversation-(audio|video)-([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/i;
+const CAMERA = 1, MIC = 2, SCREEN_SHARE = 3;
 
 async function loadCall(ctx, id) {
   const [call] = await ctx.rest(`mw_dm_calls?id=eq.${id}&select=id,caller_id,callee_id,status,offer,created_at&limit=1`) || [];
@@ -23,7 +24,7 @@ async function authorize({ request, ctx, body }) {
   if (![call.caller_id, call.callee_id].includes(me)) throw new ApiError(403, 'Not allowed.');
   const videoCall = call.offer?.callType === 'video' || call.offer?.mode === 'video' || call.offer?.videoEnabled === true;
   if (videoCall === audio) throw new ApiError(403, 'Not allowed.');
-  const sources = audio ? [2] : [1, 2];
+  const sources = [CAMERA, MIC, SCREEN_SHARE];
 
   if (action === 'end') {
     if (['ringing', 'accepted'].includes(call.status)) {

@@ -4,7 +4,7 @@
 // Everything else (calls, conversation rooms) and sites without those settings go through the Supabase
 // livekit-token Edge Function as before.
 import { authenticate, SUPABASE } from './_lib/supa.js';
-import { livekitUrl, livekitUsable, accessToken, closeRoom, CAMERA, MIC, CALL_TOKEN_TTL_SECONDS } from './_lib/livekit.js';
+import { livekitUrl, livekitUsable, accessToken, closeRoom, CAMERA, MIC, SCREEN_SHARE, CALL_TOKEN_TTL_SECONDS } from './_lib/livekit.js';
 
 function getSupabaseConfig(req) {
   const apiKey = (
@@ -109,7 +109,7 @@ async function callToken(req, res, body) {
     if (callType !== (video ? 'video' : 'audio')) return res.status(403).json({ error: 'Not allowed.' });
     const [profile] = await ctx.rest(`mw_profiles?id=eq.${me}&select=display_name,username,avatar_url&limit=1`).catch(() => []) || [];
     const token = accessToken({
-      identity: me, room, canPublish: true, sources: video ? [CAMERA, MIC] : [MIC], ttlSeconds: CALL_TOKEN_TTL_SECONDS,
+      identity: me, room, canPublish: true, sources: [CAMERA, MIC, SCREEN_SHARE], ttlSeconds: CALL_TOKEN_TTL_SECONDS,
       name: String(profile?.display_name || profile?.username || body.name || 'MilkyWay user').slice(0, 80),
       metadata: JSON.stringify({ avatar: String(profile?.avatar_url || '').slice(0, 500), callType, videoEnabled: video }),
     }, ctx.env);

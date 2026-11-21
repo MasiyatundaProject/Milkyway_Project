@@ -1,4 +1,4 @@
-import { route, ApiError, requireUuid, eq, isUuid } from './_lib/supa.js';
+import { route, ApiError, requireUuid, eq, isUuid, isMissingSchema } from './_lib/supa.js';
 
 const text = (value, max) => String(value ?? '').trim().slice(0, max);
 const groupName = value => {
@@ -130,8 +130,14 @@ export default route({
 
   'mark-read': async ({ ctx, body, query, method }) => {
     if (method !== 'POST') throw new ApiError(405, 'Method not allowed.');
-    await ctx.rpc('mw_dm_group_mark_read', { p_group: groupId(body, query) });
-    return { ok: true };
+    try {
+      await ctx.rpc('mw_dm_group_mark_read', { p_group: groupId(body, query) });
+      return { ok: true };
+    } catch (error) {
+      if (!isMissingSchema(error)) throw error;
+      console.warn('[groups] Read-state migration is unavailable; group read state was not saved.');
+      return { ok: true, readStateAvailable: false };
+    }
   },
 
   create: async ({ ctx, body }) => {
