@@ -40,7 +40,7 @@ export async function setSaved(ctx, postId, on) {
   const post = requireUuid(String(postId || ''), 'post');
   if (on) {
     // Only posts the caller is allowed to see (Supabase row-level security on mw_posts decides).
-    const rows = await ctx.rest(`mw_posts?id=${eq(post)}&select=id&limit=1`).catch(() => null);
+    const rows = await ctx.rest(`mw_posts?id=${eq(post)}&select=id&limit=1`);
     if (Array.isArray(rows) && !rows.length) throw new ApiError(404, 'This post is no longer available.');
   }
   const sql = db()?.sql;
@@ -48,7 +48,7 @@ export async function setSaved(ctx, postId, on) {
     try {
       if (on) await sql`INSERT INTO mw_post_saves (user_id, post_id) VALUES (${me}, ${post}) ON CONFLICT (user_id, post_id) DO NOTHING`;
       else await sql`DELETE FROM mw_post_saves WHERE user_id = ${me} AND post_id = ${post}`;
-    } catch { throw new ApiError(503, 'Saved posts are unavailable right now.'); }
+    } catch (error) { throw new ApiError(503, error?.message || 'Saved posts are unavailable right now.'); }
     return { saved: on };
   }
   if (on) await ctx.rest('mw_saves?on_conflict=post_id,user_id', { method: 'POST', prefer: 'resolution=ignore-duplicates', body: { post_id: post, user_id: me } });

@@ -128,15 +128,27 @@ const updatePost = (postId, change) => feeds.forEach(({ source }) => {
   if (!value?.posts?.some(post => post.id === postId)) return;
   source.mutate({ ...value, posts: value.posts.map(post => (post.id === postId ? { ...post, ...change(post) } : post)) });
 });
+const snapshotPost = (postId, fields) => {
+  const snapshots = new Map();
+  feeds.forEach(({ source }) => {
+    const post = source.value?.posts?.find(item => item.id === postId);
+    if (post) snapshots.set(source, Object.fromEntries(fields.map(field => [field, post[field]])));
+  });
+  return snapshots;
+};
+const restorePost = (postId, snapshots) => feeds.forEach(({ source }) => {
+  const previous = snapshots.get(source);
+  const value = source.value;
+  if (!previous || !value?.posts?.some(post => post.id === postId)) return;
+  source.mutate({ ...value, posts: value.posts.map(post => (post.id === postId ? { ...post, ...previous } : post)) });
+});
 
 // ---- Writes (idempotent, so a replay after a flaky connection never double-counts) ----
 // Row-level security only lets people write their own rows. An operation queued offline by another account on this
 // device (or before sign-out) would be refused with "violates row-level security policy", so it is dropped instead.
 const ownOp = send => op => (op.user && op.user === auth.userId ? send(op) : Promise.resolve('skipped'));
-// Readable message instead of the raw PostgREST text (e.g. 'new row violates row-level security policy for table "mw_saves"').
-const friendly = (error, key) => {
+const friendly = error => {
   if (error?.status === 401) return Object.assign(new Error(t('signInToContinue')), { status: 401 });
-  if (error?.status === 403 || /row-level security/i.test(String(error?.message || ''))) return Object.assign(new Error(t(key)), { status: 403 });
   return error;
 };
 registerOp('like', ownOp(op => op.on
@@ -151,19 +163,24 @@ registerOp('follow', ownOp(op => op.on
 
 export const actions = {
   like(post, on) {
+    const user = auth.userId;
+    if (!user) return Promise.reject(friendly({ status: 401 }));
+    const previous = snapshotPost(post.id, ['liked', 'likes']);
     updatePost(post.id, current => ({ liked: on, likes: Math.max(0, current.likes + (on === current.liked ? 0 : on ? 1 : -1)) }));
-    return perform('like', { post: post.id, user: auth.userId, on }).catch(error => {
-      updatePost(post.id, current => ({ liked: !on, likes: Math.max(0, current.likes + (on ? -1 : 1)) }));
-      throw friendly(error, 'likeFailed');
+    return perform('like', { post: post.id, user, on }).catch(error => {
+      restorePost(post.id, previous);
+      throw friendly(error);
     });
   },
   save(post, on) {
+    const user = auth.userId;
+    if (!user) return Promise.reject(friendly({ status: 401 }));
+    const previous = snapshotPost(post.id, ['saved']);
     updatePost(post.id, () => ({ saved: on }));
-    if (!auth.userId) return Promise.reject(friendly({ status: 401 }));
-    return perform('save', { post: post.id, user: auth.userId, on }).then(result => {
+    return perform('save', { post: post.id, user, on }).then(result => {
       if (result === 'sent' && on) toast(t('saved'));
       return result;
-    }).catch(error => { updatePost(post.id, () => ({ saved: !on })); throw friendly(error, 'saveFailed'); });
+    }).catch(error => { restorePost(post.id, previous); throw friendly(error); });
   },
   follow(authorId, on) {
     profiles.setFollowing(authorId, on);

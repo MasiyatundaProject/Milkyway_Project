@@ -429,12 +429,12 @@ export class PostViewer {
     const post = this.post;
     if (!post || !this.hooks.requireLogin?.()) return;
     const on = !post.liked;
+    const previous = { liked: post.liked, likes: post.likes || 0 };
     post.liked = on;
     post.likes = Math.max(0, (post.likes || 0) + (on ? 1 : -1));
     this.#paintCounts();
     actions.like(this.#feedShape(), on).catch(error => {
-      post.liked = !on;
-      post.likes = Math.max(0, post.likes + (on ? -1 : 1));
+      Object.assign(post, previous);
       if (this.post === post) this.#paintCounts();
       toast(error?.message || t('retry'));
     });

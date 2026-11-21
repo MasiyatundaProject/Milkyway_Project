@@ -80,7 +80,7 @@ function makeContext(user, token, key, environment = null) {
       const message = typeof data === 'object' && data ? data.message || data.error || data.hint : '';
       const status = /Slow mode is on/.test(message) ? 429
         : result.status === 401 ? 401 : result.status === 404 ? 404 : [400, 403, 409, 422].includes(result.status) ? result.status : 503;
-      throw new ApiError(status, status === 403 ? 'Not allowed.' : message || 'Request failed.');
+      throw new ApiError(status, message || 'Request failed.');
     }
     return data;
   };
