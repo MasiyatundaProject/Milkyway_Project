@@ -711,7 +711,14 @@ test('DM call connection uses authenticated LiveKit tokens and reports server co
   assert.match(callView, /element\.playsInline = true/);
   assert.match(callView, /#showMediaError\(error, 'camera publishing'\)/);
   assert.match(callView, /#showMediaError\(error, 'camera toggle'\)/);
-  assert.match(callView, /console\.error\(`\[call\] \$\{operation\} failed`, error\)/);
+  assert.match(callView, /CALL_TOKEN_ENDPOINT = `\$\{config\.api\.base\}\/milkyway-call\?action=token`/);
+  assert.match(callView, /action === 'token' \? CALL_TOKEN_ENDPOINT/);
+  assert.match(callView, /participantIdentity: auth\.userId/);
+  assert.match(callView, /roomName: this\.roomName/);
+  assert.match(callView, /errorCode: callErrorCode\(error\)/);
+  assert.match(callView, /console\.error\(`\[call\] \$\{operation\} failed`, diagnostics, error\)/);
+  assert.match(callView, /this\.errorMessage\.textContent = `\$\{operation === 'camera publishing'/);
+  assert.match(callView, /insufficient permissions\\D\*\(\\d\+\)/);
   assert.doesNotMatch(callCss, /\.call-layer\[data-mode="audio"\] \.call-local/);
   assert.doesNotMatch(callView, /await directCallToken/);
   assert.doesNotMatch(callView, /directTokenEndpoint|directCallToken/);

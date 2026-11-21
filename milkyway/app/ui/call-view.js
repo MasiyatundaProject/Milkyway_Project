@@ -19,14 +19,20 @@ const CALL_API = `${config.api.base}/milkyway-call`;
 const callErrorText = error => [
   error?.message, error?.reason, error?.code, error?.cause?.message, error?.cause?.code,
 ].filter(value => value != null).join(' ');
+const callErrorCode = error => {
+  const code = error?.code ?? error?.cause?.code ?? error?.status ?? error?.cause?.status;
+  if (code != null) return code;
+  return /insufficient permissions\D*(\d+)/i.exec(callErrorText(error))?.[1] || 'unknown';
+};
 const isUsageLimitError = error => [402, 429].includes(error?.status)
   || /quota|resource[\s_-]*exhausted|rate.?limit|usage limit|limit reached|too many requests/i.test(callErrorText(error));
+const CALL_TOKEN_ENDPOINT = `${config.api.base}/milkyway-call?action=token`;
 async function callAccessToken(roomName, callId, name) {
   const access = await callApi('token', { id: callId, name });
   return assertRoomAccess(access, roomName);
 }
 const RING_MS = 55_000;
-const callApi = (action, body) => api(`${CALL_API}?action=${action}`, body ? { method: 'POST', body, timeout: 15000 } : { timeout: 12000 });
+const callApi = (action, body) => api(action === 'token' ? CALL_TOKEN_ENDPOINT : `${CALL_API}?action=${action}`, body ? { method: 'POST', body, timeout: 15000 } : { timeout: 12000 });
 const getCall = id => api(`${CALL_API}?id=${encodeURIComponent(id)}`, { timeout: 10000 }).then(data => data?.call || null);
 const callTypeOf = call => call?.offer?.callType === 'video' || call?.offer?.mode === 'video' || call?.offer?.videoEnabled === true ? 'video' : 'audio';
 
@@ -172,6 +178,7 @@ class CallScreen {
     this.#setState('connecting');
     try {
       const roomName = `dm-call-${[this.call.caller_id, this.call.callee_id].map(id => id.toLowerCase()).sort().join('-')}`;
+      this.roomName = roomName;
       const [sdk, access] = await Promise.all([loadLiveKit(), callAccessToken(roomName, this.call.id, auth.name)]);
       if (this.closed) return;
       assertRoomAccess(access, roomName);
@@ -252,8 +259,14 @@ class CallScreen {
 
   #showMediaError(error, operation) {
     const detail = callErrorText(error) || t('callFailed');
-    console.error(`[call] ${operation} failed`, error);
-    this.errorMessage.textContent = `${operation === 'camera publishing' ? 'Camera could not be published' : 'Camera action failed'}: ${detail}`;
+    const diagnostics = {
+      endpoint: CALL_TOKEN_ENDPOINT,
+      participantIdentity: auth.userId || 'unknown',
+      roomName: this.roomName || 'unknown',
+      errorCode: callErrorCode(error),
+    };
+    console.error(`[call] ${operation} failed`, diagnostics, error);
+    this.errorMessage.textContent = `${operation === 'camera publishing' ? 'Camera could not be published' : 'Camera action failed'}: ${detail} (code: ${diagnostics.errorCode}; endpoint: ${diagnostics.endpoint}; participant: ${diagnostics.participantIdentity}; room: ${diagnostics.roomName})`;
     this.errorMessage.hidden = false;
     toast(`${t('callFailed')}: ${detail}`);
   }
