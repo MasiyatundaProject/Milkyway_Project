@@ -58,6 +58,7 @@ class CallScreen {
     this.connectedAt = 0;
     this.micOn = true;
     this.camOn = this.callType === 'video';
+    this.camTogglePending = false;
     this.facing = 'user';
     this.#build();
     playback.suspend(true);
@@ -148,6 +149,9 @@ class CallScreen {
     this.flipBtn = button(t('flipCamera'), icon.flip, () => this.#flip());
     this.endBtn = button(t('endCall'), icons.hangup, () => this.hangUp(this.connectedAt ? 'ended' : 'cancelled'), 'end');
     if (this.mode !== 'video') { this.camBtn.hidden = true; this.flipBtn.hidden = true; }
+    this.#syncCameraButton();
+    this.camBtn.disabled = true;
+    this.flipBtn.disabled = true;
     this.controls = h('div', { class: 'call-controls' }, this.micBtn, this.camBtn, this.flipBtn, this.endBtn);
     this.answer = h('div', { class: 'call-answer' },
       h('button', { class: 'call-btn end', type: 'button', 'aria-label': t('decline'), html: icons.hangup, onclick: () => this.#decline() }),
@@ -167,6 +171,13 @@ class CallScreen {
   #setState(state) {
     this.state = state;
     this.root.dataset.state = state;
+    if (state === 'connecting' || state === 'reconnecting') {
+      this.camBtn.disabled = true;
+      this.flipBtn.disabled = true;
+    } else if (this.roomConnected && this.mode === 'video') {
+      this.camBtn.disabled = this.camTogglePending;
+      this.flipBtn.disabled = false;
+    }
     const labels = {
       incoming: this.mode === 'video' ? t('incomingVideo') : t('incomingAudio'),
       ringing: t('ringing'), connecting: t('joining'), connected: t('callConnected'),
@@ -205,8 +216,18 @@ class CallScreen {
         audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
       room
-        .on(RoomEvent.TrackSubscribed, track => this.#attachRemote(track, Track))
-        .on(RoomEvent.TrackUnsubscribed, track => track.detach().forEach(element => element.remove()))
+        .on(RoomEvent.TrackSubscribed, (track, _publication, participant) => {
+          this.#attachRemote(track, Track, participant);
+          if (participant) this.#peerJoined();
+        })
+        .on(RoomEvent.TrackUnsubscribed, track => {
+          track.detach().forEach(element => element.remove());
+          if (track.kind === Track.Kind.Video && this.remoteVideoTrack === track) {
+            this.remoteVideoTrack = null;
+            this.remote.replaceChildren();
+            this.root.classList.remove('has-video');
+          }
+        })
         .on(RoomEvent.ParticipantConnected, () => this.#peerJoined())
         .on(RoomEvent.ParticipantDisconnected, () => { if (this.connectedAt && !room.remoteParticipants.size) this.hangUp('ended'); })
         .on(RoomEvent.Reconnecting, () => this.#setState('reconnecting'))
@@ -225,6 +246,8 @@ class CallScreen {
       await room.connect(access.serverUrl, access.token, { autoSubscribe: true });
       this.roomConnected = true;
       if (this.closed) { this.#disconnectRoom(); return; }
+      this.camBtn.disabled = this.mode !== 'video';
+      this.flipBtn.disabled = this.mode !== 'video';
       try { await room.localParticipant.setMicrophoneEnabled(this.micOn); }
       catch (error) {
         console.warn('[call] microphone setup failed', error);
@@ -236,13 +259,14 @@ class CallScreen {
           await room.localParticipant.setCameraEnabled(true, { facingMode: this.facing });
         } catch (error) {
           this.camOn = false;
-          this.camBtn.classList.add('off');
-          this.camBtn.innerHTML = icons.camOff;
+          this.#syncCameraButton();
           this.#showMediaError(error, 'camera publishing');
         }
       }
       if (room.remoteParticipants.size) this.#peerJoined();
-      room.remoteParticipants.forEach(participant => participant.trackPublications.forEach(publication => publication.track && this.#attachRemote(publication.track, Track)));
+      room.remoteParticipants.forEach(participant => participant.trackPublications.forEach(publication => {
+        if (publication.isSubscribed && publication.track) this.#attachRemote(publication.track, Track, participant);
+      }));
     } catch (error) {
       if (this.closed) return;
       console.warn('[call] connect failed', error);
@@ -307,7 +331,10 @@ class CallScreen {
     this.playAudioBtn.hidden = true;
     this.remote.replaceChildren();
     this.local.replaceChildren();
+    this.remoteVideoTrack = null;
     this.root.classList.remove('has-video');
+    this.camBtn.disabled = true;
+    this.flipBtn.disabled = true;
   }
 
   #peerJoined() {
@@ -325,7 +352,7 @@ class CallScreen {
     this.local.hidden = false;
   }
 
-  #attachRemote(track, Track) {
+  #attachRemote(track, Track, participant) {
     if (track.kind === Track.Kind.Audio) {
       const element = track.attach();
       this.audioBox.append(element);
@@ -336,9 +363,13 @@ class CallScreen {
     const element = document.createElement('video');
     element.autoplay = true;
     element.playsInline = true;
+    element.muted = true;
+    element.setAttribute('aria-label', participant?.name ? `${participant.name} video` : 'Remote video');
     track.attach(element);
     this.remote.replaceChildren(element);
+    this.remoteVideoTrack = track;
     this.root.classList.add('has-video');
+    element.play().catch(error => console.warn('[call] remote video playback was blocked', error));
   }
 
   async #enableRemoteAudio() {
@@ -414,15 +445,32 @@ class CallScreen {
   }
 
   async #toggleCam() {
+    if (this.camTogglePending) return;
     const enabled = !this.camOn;
-    if (!this.room) return;
-    try { await this.room.localParticipant.setCameraEnabled(enabled, { facingMode: this.facing }); }
-    catch (error) { this.#showMediaError(error, 'camera toggle'); return; }
-    this.camOn = enabled;
+    if (!this.room?.localParticipant) return;
+    this.camTogglePending = true;
+    this.camBtn.disabled = true;
+    try {
+      await this.room.localParticipant.setCameraEnabled(enabled, { facingMode: this.facing });
+      this.camOn = enabled;
+      this.local.hidden = !enabled;
+      if (enabled) this.errorMessage.hidden = true;
+    } catch (error) {
+      this.#showMediaError(error, 'camera toggle');
+    } finally {
+      this.camTogglePending = false;
+      this.#syncCameraButton();
+      this.camBtn.disabled = !this.roomConnected;
+    }
+  }
+
+  #syncCameraButton() {
+    const label = this.camOn ? t('cameraOffAction') : t('cameraOnAction');
     this.camBtn.classList.toggle('off', !this.camOn);
     this.camBtn.innerHTML = this.camOn ? icon.camera : icons.camOff;
-    this.local.hidden = !this.camOn;
-    if (enabled) this.errorMessage.hidden = true;
+    this.camBtn.setAttribute('aria-pressed', String(this.camOn));
+    this.camBtn.setAttribute('aria-label', label);
+    this.camBtn.title = label;
   }
 
   async #flip() {

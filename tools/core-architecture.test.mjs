@@ -971,6 +971,13 @@ test('DM call connection uses authenticated LiveKit tokens and reports server co
   assert.match(callView, /setMicrophoneEnabled\(this\.micOn\)/);
   assert.match(callView, /setCameraEnabled\(this\.camOn/);
   assert.match(callView, /await room\.localParticipant\.setCameraEnabled\(true,[\s\S]*?#showMediaError\(error, 'camera publishing'\)/);
+  assert.match(callView, /\.on\(RoomEvent\.TrackSubscribed, \(track, _publication, participant\) =>/);
+  assert.match(callView, /publication\.isSubscribed && publication\.track/);
+  assert.match(callView, /element\.muted = true/);
+  assert.match(callView, /element\.play\(\)\.catch\(error => console\.warn\('\[call\] remote video playback was blocked'/);
+  assert.match(callView, /this\.camBtn\.setAttribute\('aria-pressed', String\(this\.camOn\)\)/);
+  assert.match(callView, /this\.camTogglePending = true/);
+  assert.match(callView, /this\.local\.hidden = !enabled/);
   assert.match(callView, /publication\.track\?\.detach\(\)/);
   assert.match(callView, /room\.disconnect\(\)/);
   assert.match(callView, /playAudioBtn/);
