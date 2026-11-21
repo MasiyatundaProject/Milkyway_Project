@@ -32,7 +32,7 @@ const commentsSheet = lazy(() => import('./ui/comments-sheet.js').then(m => new 
 const giftTray = lazy(() => import('./ui/gift-tray.js').then(m => new m.GiftTray({
   onTopUp: () => novaMenu().then(menu => menu.openWallet()),
 })));
-const inboxView = lazy(() => import('./ui/inbox-view.js').then(m => new m.InboxView()));
+const inboxView = lazy(() => import('./ui/inbox-view.js').then(m => new m.InboxView({ openProfile })));
 const notificationsView = lazy(() => import('./ui/notifications-view.js').then(m => new m.NotificationsView({
   onOpenLive: room => showLive(room),
   onOpenMessage: peerId => openDirectMessage(peerId),

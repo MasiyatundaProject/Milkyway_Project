@@ -859,6 +859,9 @@ html[data-low-end] .create-orb, html[data-low-end] .gift-card, html[data-low-end
 .chat-head .icon-btn { flex: none; width: 42px; height: 42px; font-size: 20px; }
 .chat-head .icon-btn:hover { background: rgba(255,255,255,.08); }
 [dir="rtl"] .chat-head .icon-btn:first-child svg { transform: scaleX(-1); }
+.chat-profile-trigger { flex: none; display: grid; width: 42px; height: 42px; place-items: center; padding: 0; border-radius: 50%; }
+.chat-profile-trigger:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+.chat-profile-trigger .presence-avatar { width: 38px; height: 38px; }
 .chat-who { flex: 1; min-width: 0; display: grid; gap: 2px; }
 .chat-who b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-call { color: var(--accent-2); }
@@ -896,6 +899,11 @@ html[data-low-end] .create-orb, html[data-low-end] .gift-card, html[data-low-end
 .dm-composer-row .msg-input { min-width: 30px; }
 .dm-composer-actions { display: flex; flex: none; align-items: flex-end; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel-2); }
 .dm-composer-actions .chat-tool { background: transparent; }
+.chat-note-selector { position: relative; }
+.chat-note-menu { position: absolute; z-index: 20; inset-inline-end: 0; bottom: calc(100% + 8px); display: grid; gap: 4px; min-width: 176px; padding: 6px; border: 1px solid rgba(190,181,255,.2); border-radius: 12px; background: rgba(12,14,39,.98); box-shadow: 0 12px 32px rgba(0,0,0,.36); }
+.chat-note-menu[hidden] { display: none; }
+.chat-note-menu .chat-tool { display: flex; width: 100%; height: 42px; align-items: center; justify-content: flex-start; gap: 10px; padding: 0 10px; border-radius: 8px; text-align: start; font-size: 13px; }
+.chat-note-menu .chat-tool::after { content: attr(title); }
 .dm-composer-actions .chat-tool.active { background: var(--electric); }
 .dm-composer-actions .chat-voice-changer { color: var(--accent-2); }
 .chat-voice-preset { width: min(135px, 34vw); height: 38px; padding: 0 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); color: var(--fg); font-size: 12px; }

@@ -56,6 +56,21 @@ export class ChatComposer {
       class: 'chat-tool chat-video-note', type: 'button', 'aria-pressed': 'false', 'aria-label': t('recordVideoNote'),
       title: t('recordVideoNote'), onclick: () => this.#record('video'),
     }, '◉');
+    this.noteButton = this.#tool(t('recordNote'), '◉', () => {
+      if (this.recording) {
+        if (this.recording.recorder.state !== 'inactive') this.recording.recorder.stop();
+        return;
+      }
+      this.noteMenu.hidden = !this.noteMenu.hidden;
+      this.noteButton.setAttribute('aria-expanded', String(!this.noteMenu.hidden));
+    });
+    this.noteButton.setAttribute('aria-haspopup', 'menu');
+    this.noteButton.setAttribute('aria-expanded', 'false');
+    this.voice.setAttribute('role', 'menuitem');
+    this.video.setAttribute('role', 'menuitem');
+    this.voice.addEventListener('click', () => { this.noteMenu.hidden = true; this.noteButton.setAttribute('aria-expanded', 'false'); });
+    this.video.addEventListener('click', () => { this.noteMenu.hidden = true; this.noteButton.setAttribute('aria-expanded', 'false'); });
+    this.noteMenu = h('div', { class: 'chat-note-menu', role: 'menu', 'aria-label': t('recordNote'), hidden: true }, this.voice, this.video);
     this.once = h('button', {
       class: 'chat-tool chat-view-once', type: 'button', 'aria-pressed': 'false',
       title: t('viewOnce'), 'aria-label': t('viewOnce'),
@@ -66,7 +81,7 @@ export class ChatComposer {
     this.form = h('form', { class: 'msg-form dm-composer', onsubmit: event => { event.preventDefault(); this.#submit(); } },
       this.preview,
       h('div', { class: 'dm-composer-row' }, this.attachment, this.input,
-        h('div', { class: 'dm-composer-actions' }, this.once, this.voice, this.voiceEffectButton, this.video, this.voicePresetSelect), this.send),
+        h('div', { class: 'dm-composer-actions' }, this.once, this.noteSelector = h('div', { class: 'chat-note-selector' }, this.noteButton, this.noteMenu), this.voiceEffectButton, this.voicePresetSelect), this.send),
       this.picker);
     this.picker.addEventListener('change', () => {
       const file = this.picker.files?.[0];
@@ -83,6 +98,7 @@ export class ChatComposer {
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder !== 'function') {
       this.voice.disabled = true;
       this.video.disabled = true;
+      this.noteButton.disabled = true;
     }
   }
 
@@ -253,6 +269,13 @@ export class ChatComposer {
       this.recordingStarting = false;
       this.voice.classList.toggle('is-recording', kind === 'audio');
       this.video.classList.toggle('is-recording', kind === 'video');
+      this.noteButton.classList.add('is-recording');
+      this.noteButton.textContent = '■';
+      this.noteButton.setAttribute('aria-pressed', 'true');
+      this.noteButton.setAttribute('aria-label', t('stopRecording'));
+      this.noteButton.title = t('stopRecording');
+      this.noteMenu.hidden = true;
+      this.noteButton.setAttribute('aria-expanded', 'false');
       this.voice.setAttribute('aria-pressed', String(kind === 'audio'));
       this.video.setAttribute('aria-pressed', String(kind === 'video'));
       this.voice.setAttribute('aria-label', kind === 'audio' ? t('stopRecording') : t('recordVoiceNote'));
@@ -319,6 +342,11 @@ export class ChatComposer {
   #resetRecordingControls() {
     this.voice.classList.remove('is-recording');
     this.video.classList.remove('is-recording');
+    this.noteButton.classList.remove('is-recording');
+    this.noteButton.textContent = '◉';
+    this.noteButton.setAttribute('aria-pressed', 'false');
+    this.noteButton.setAttribute('aria-label', t('recordNote'));
+    this.noteButton.title = t('recordNote');
     this.voice.setAttribute('aria-pressed', 'false');
     this.video.setAttribute('aria-pressed', 'false');
     this.voice.setAttribute('aria-label', t('recordVoiceNote'));

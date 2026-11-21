@@ -28,7 +28,7 @@ function presenceAvatar(person, size) {
 presence.subscribe(() => document.querySelectorAll('[data-presence]').forEach(node => node.classList.toggle('online', presence.isOnline(node.dataset.presence))));
 
 export class InboxView {
-  constructor() {
+  constructor({ openProfile } = {}) {
     this.sheet = new Sheet({ title: t('chats'), className: 'inbox-sheet' });
     this.active = h('p', { class: 'muted inbox-active' });
     this.list = h('div', { class: 'chat-list' });
@@ -46,7 +46,7 @@ export class InboxView {
           h('button', { class: 'pill-btn', type: 'button', onclick: () => this.createGroup.open() }, h('span', { html: icon.plus }), t('createGroup')),
           h('button', { class: 'pill-btn hot', type: 'button', onclick: () => this.#toggleSearch() }, h('span', { html: icon.plus }), t('newChat')))),
       this.searchBox, this.discoverBox, this.groupSection, this.list);
-    this.chat = new ChatSheet();
+    this.chat = new ChatSheet({ openProfile });
     this.groupChat = new GroupChatSheet({
       onChanged: () => this.#loadGroups(),
       onDeleted: groupId => this.#removeGroupLocally(groupId),
@@ -238,7 +238,8 @@ export class InboxView {
 }
 
 class ChatSheet {
-  constructor() {
+  constructor({ openProfile } = {}) {
+    this.openProfile = openProfile;
     this.sheet = new Sheet({ title: '', className: 'chat-sheet', onClose: () => { setForegroundConversation(null); this.peer = null; this.#closeActionMenu(); this.composer.cancelRecording(); this.watchParty.leave(); this.#clearRevealed(); } });
     this.sheet.heading.hidden = true;
     this.name = h('b', {});
@@ -256,21 +257,22 @@ class ChatSheet {
       this.#closeActionMenu();
       onclick();
     } }, label);
-    this.actionMenuToggle = iconBtn(t('menu'), '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7" fill="currentColor"/><circle cx="12" cy="12" r="1.7" fill="currentColor"/><circle cx="19" cy="12" r="1.7" fill="currentColor"/></svg>', () => this.#toggleActionMenu());
+    this.actionMenuToggle = iconBtn(t('callActions'), phoneIcon, () => this.#toggleActionMenu());
     this.actionMenuToggle.classList.add('chat-menu-toggle');
     this.actionMenuToggle.setAttribute('aria-haspopup', 'menu');
     this.actionMenuToggle.setAttribute('aria-expanded', 'false');
-    this.actionMenu = h('div', { class: 'chat-action-menu', role: 'menu', 'aria-label': t('menu'), hidden: true },
-      actionItem(t('audioCall'), () => this.peer && calls.start(this.peer.id, 'audio')),
+    this.actionMenu = h('div', { class: 'chat-action-menu', role: 'menu', 'aria-label': t('callActions'), hidden: true },
       actionItem(t('videoCall'), () => this.peer && calls.start(this.peer.id, 'video')),
+      actionItem(t('audioCall'), () => this.peer && calls.start(this.peer.id, 'audio')),
       actionItem(t('watchTogether'), () => this.watchParty.openPanel()));
     this.actionMenuWrap = h('div', { class: 'chat-action-wrap' }, this.actionMenuToggle, this.actionMenu);
     this.sheet.body.append(
       h('header', { class: 'chat-head' },
         iconBtn(t('back'), backIcon, () => this.sheet.close()),
-        this.face,
+        h('button', { class: 'chat-profile-trigger', type: 'button', 'aria-label': t('viewProfile'), title: t('viewProfile'), onclick: () => {
+          if (this.peer) this.openProfile?.(this.peer);
+        } }, this.face),
         h('div', { class: 'chat-who' }, this.name, this.state),
-        iconBtn(t('videoCall'), icon.camera, () => this.peer && calls.start(this.peer.id, 'video')),
         this.actionMenuWrap),
       this.watchParty.root,
       this.list, this.composer.form);

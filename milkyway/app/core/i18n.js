@@ -145,6 +145,7 @@ const strings = {
     // Messages & calls
     newChat: 'New message', searchPeople: 'Search people by name or @username', noResults: 'No one found', typeMessage: 'Message…',
     cantMessage: 'This person is not accepting messages from you', messageFailed: 'Message not sent', audioCall: 'Audio call',
+    callActions: 'Call and chat actions', recordNote: 'Record a voice or video note',
     videoCall: 'Video call', calling: 'Calling…', ringing: 'Ringing…', incomingAudio: 'Incoming audio call', incomingVideo: 'Incoming video call',
     callConnected: 'Connected', callEnded: 'Call ended', callDeclined: 'Call declined', noAnswer: 'No answer', callFailed: 'Call could not connect',
     callAlreadyActiveReset: 'An earlier call with this person is still active. End it and start a new call?', callResetFailed: 'The earlier call could not be ended. Try again.',
@@ -337,6 +338,7 @@ const strings = {
     // Ujumbe na simu
     newChat: 'Ujumbe mpya', searchPeople: 'Tafuta watu kwa jina au @jina', noResults: 'Hakuna aliyepatikana', typeMessage: 'Ujumbe…',
     cantMessage: 'Mtu huyu hapokei ujumbe kutoka kwako', messageFailed: 'Ujumbe haukutumwa', audioCall: 'Simu ya sauti',
+    callActions: 'Chaguo za simu na gumzo', recordNote: 'Rekodi ujumbe wa sauti au video',
     videoCall: 'Simu ya video', calling: 'Inapiga…', ringing: 'Inaita…', incomingAudio: 'Simu ya sauti inaingia', incomingVideo: 'Simu ya video inaingia',
     callConnected: 'Mmeunganishwa', callEnded: 'Simu imekwisha', callDeclined: 'Simu imekataliwa', noAnswer: 'Hakuna jibu', callFailed: 'Simu haikuweza kuunganishwa',
     callAlreadyActiveReset: 'Simu ya awali na mtu huyu bado inaendelea. Uimalize na uanze simu mpya?', callResetFailed: 'Imeshindikana kumaliza simu ya awali. Jaribu tena.',
