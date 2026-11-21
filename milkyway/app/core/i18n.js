@@ -87,6 +87,8 @@ const strings = {
     httpsBackgroundOnly: 'Use a public HTTPS URL', backgroundUnavailable: 'Background media could not be loaded',
     joiningStage: 'Joining the stage…', movedToAudience: 'The host moved you back to the audience', hostAllowedMic: 'The host allowed your mic again', leftStage: 'You left the stage',
     muteMyMic: 'Mute my mic', unmuteMyMic: 'Unmute my mic', cameraOffAction: 'Turn camera off', cameraOnAction: 'Turn camera on',
+    audioOutput: 'Audio output', moreCallOptions: 'More call options', audioOutputUnavailable: 'Audio output selection is not supported on this device',
+    defaultAudioOutput: 'System default', audioOutputDevice: 'Audio output {number}',
     // Nova menu & settings
     menu: 'Menu', settings: 'Settings & privacy', privacy: 'Privacy', privacyPolicy: 'Privacy policy', deleteAccount: 'Request account deletion',
     privateAccountHint: 'Only followers you approve see your posts',
@@ -277,6 +279,8 @@ const strings = {
     httpsBackgroundOnly: 'Tumia kiungo cha HTTPS cha umma', backgroundUnavailable: 'Mandhari haikuweza kupakiwa',
     joiningStage: 'Unaingia jukwaani…', movedToAudience: 'Mwenyeji amekurudisha kwa watazamaji', hostAllowedMic: 'Mwenyeji amekuruhusu kutumia maikrofoni tena', leftStage: 'Umetoka jukwaani',
     muteMyMic: 'Zima maikrofoni yangu', unmuteMyMic: 'Washa maikrofoni yangu', cameraOffAction: 'Zima kamera', cameraOnAction: 'Washa kamera',
+    audioOutput: 'Sauti itoke wapi', moreCallOptions: 'Chaguo zaidi za simu', audioOutputUnavailable: 'Kifaa hiki hakiwezi kuchagua njia ya kutoa sauti',
+    defaultAudioOutput: 'Chaguo-msingi la kifaa', audioOutputDevice: 'Kifaa cha sauti {number}',
     // Menyu ya Nova na mipangilio
     menu: 'Menyu', settings: 'Mipangilio na faragha', privacy: 'Faragha', privacyPolicy: 'Sera ya faragha', deleteAccount: 'Omba kufuta akaunti',
     privateAccountHint: 'Wafuasi unaowakubali tu ndio wanaona posts zako',

@@ -942,6 +942,7 @@ test('LIVE room UPSERT targets have unique indexes after duplicate rows are reco
 
 test('DM call connection uses authenticated LiveKit tokens and reports server configuration failures', () => {
   const callView = readFileSync(new URL('../milkyway/app/ui/call-view.js', import.meta.url), 'utf8');
+  const inboxView = readFileSync(new URL('../milkyway/app/ui/inbox-view.js', import.meta.url), 'utf8');
   const callCss = readFileSync(new URL('../milkyway/app/app.css', import.meta.url), 'utf8');
   const liveKit = readFileSync(new URL('../api/_lib/livekit.js', import.meta.url), 'utf8');
   const callApi = readFileSync(new URL('../api/milkyway-call.js', import.meta.url), 'utf8');
@@ -998,7 +999,18 @@ test('DM call connection uses authenticated LiveKit tokens and reports server co
   assert.match(callView, /playAudioBtn/);
   assert.match(callView, /#enableRemoteAudio/);
   assert.match(callView, /assertRoomAccess/);
-  assert.match(callCss, /\.call-controls, \.call-answer \{ position: fixed; z-index: 4;/);
+  assert.match(inboxView, /chat-action-menu[\s\S]*t\('audioCall'\)[\s\S]*t\('videoCall'\)[\s\S]*t\('watchTogether'\)/);
+  assert.match(inboxView, /aria-expanded/);
+  assert.match(callView, /this\.audioRouteBtn = button\(t\('audioOutput'\)/);
+  assert.match(callView, /this\.moreBtn = button\(t\('moreCallOptions'\)/);
+  assert.match(callView, /this\.optionsMenu, this\.moreBtn, this\.audioRouteBtn, this\.camBtn, this\.flipBtn, this\.micBtn, this\.endBtn/);
+  assert.match(callView, /this\.flipBtn\.classList\.add\('call-flip-btn'\)/);
+  assert.match(callView, /setSinkId\(deviceId\)/);
+  assert.match(callView, /navigator\.mediaDevices\?\.enumerateDevices/);
+  assert.match(callCss, /\.call-controls \{[^}]*background: transparent; box-shadow: none/);
+  assert.doesNotMatch(callCss, /\.call-controls \{[^}]*border-radius: 999px/);
+  assert.match(callCss, /\.call-layer\[data-mode="video"\] \.call-remote \{ bottom: calc\(84px \+ env\(safe-area-inset-bottom\)\)/);
+  assert.match(callCss, /@media \(max-width: 340px\) \{\s*\.call-controls \{ flex-wrap: wrap;/);
   assert.match(callCss, /bottom: calc\(16px \+ env\(safe-area-inset-bottom\)\)/);
   assert.match(callCss, /\.call-remote \{[^}]*pointer-events: none/);
   assert.match(callCss, /\.call-btn \{[^}]*min-width: 48px; min-height: 48px/);
@@ -1209,7 +1221,7 @@ test('LIVE hidden-tab lifecycle rests viewers, keeps audio during grace, and end
   assert.match(css, /\.live-resting-art svg/);
   assert.match(css, /--mw-live-rest-image/);
   assert.match(index, /app\/app\.css\?v=30/);
-  assert.match(worker, /milkyway-v241-guest-view-only/);
+  assert.match(worker, /milkyway-v249-watch-party-access/);
   assert.match(worker, /app\/app\.css\?v=30/);
 });
 

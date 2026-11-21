@@ -239,7 +239,7 @@ export class InboxView {
 
 class ChatSheet {
   constructor() {
-    this.sheet = new Sheet({ title: '', className: 'chat-sheet', onClose: () => { setForegroundConversation(null); this.peer = null; this.composer.cancelRecording(); this.watchParty.leave(); this.#clearRevealed(); } });
+    this.sheet = new Sheet({ title: '', className: 'chat-sheet', onClose: () => { setForegroundConversation(null); this.peer = null; this.#closeActionMenu(); this.composer.cancelRecording(); this.watchParty.leave(); this.#clearRevealed(); } });
     this.sheet.heading.hidden = true;
     this.name = h('b', {});
     this.state = h('small', { class: 'muted' });
@@ -252,22 +252,44 @@ class ChatSheet {
     });
     this.watchParty = new WatchParty();
     const iconBtn = (label, html, onclick) => h('button', { class: 'icon-btn chat-call', type: 'button', 'aria-label': label, title: label, html, onclick });
+    const actionItem = (label, onclick) => h('button', { class: 'chat-action-item', type: 'button', role: 'menuitem', onclick: () => {
+      this.#closeActionMenu();
+      onclick();
+    } }, label);
+    this.actionMenuToggle = iconBtn(t('menu'), '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7" fill="currentColor"/><circle cx="12" cy="12" r="1.7" fill="currentColor"/><circle cx="19" cy="12" r="1.7" fill="currentColor"/></svg>', () => this.#toggleActionMenu());
+    this.actionMenuToggle.classList.add('chat-menu-toggle');
+    this.actionMenuToggle.setAttribute('aria-haspopup', 'menu');
+    this.actionMenuToggle.setAttribute('aria-expanded', 'false');
+    this.actionMenu = h('div', { class: 'chat-action-menu', role: 'menu', 'aria-label': t('menu'), hidden: true },
+      actionItem(t('audioCall'), () => this.peer && calls.start(this.peer.id, 'audio')),
+      actionItem(t('videoCall'), () => this.peer && calls.start(this.peer.id, 'video')),
+      actionItem(t('watchTogether'), () => this.watchParty.openPanel()));
+    this.actionMenuWrap = h('div', { class: 'chat-action-wrap' }, this.actionMenuToggle, this.actionMenu);
     this.sheet.body.append(
       h('header', { class: 'chat-head' },
         iconBtn(t('back'), backIcon, () => this.sheet.close()),
         this.face,
         h('div', { class: 'chat-who' }, this.name, this.state),
-        iconBtn(t('audioCall'), phoneIcon, () => this.peer && calls.start(this.peer.id, 'audio')),
         iconBtn(t('videoCall'), icon.camera, () => this.peer && calls.start(this.peer.id, 'video')),
-        iconBtn(t('watchTogether'), icon.play, () => this.watchParty.openPanel())),
+        this.actionMenuWrap),
       this.watchParty.root,
       this.list, this.composer.form);
     this.messages = new Map();
     onMessage(event => this.#live(event));
     presence.subscribe(() => this.#paintState());
+    document.addEventListener('pointerdown', event => {
+      if (!this.actionMenuWrap.contains(event.target)) this.#closeActionMenu();
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && !this.actionMenu.hidden) {
+        this.#closeActionMenu();
+        this.actionMenuToggle.focus();
+      }
+    });
   }
 
   open(person) {
+    this.#closeActionMenu();
     this.composer.cancelRecording();
     this.watchParty.join('dm', person.id).catch(error => toast(error?.message || t('watchConnectFailed')));
     this.#clearRevealed();
@@ -280,6 +302,18 @@ class ChatSheet {
     this.list.replaceChildren(h('p', { class: 'muted center' }, t('loading')));
     this.sheet.open();
     this.#load(person.id);
+  }
+
+  #toggleActionMenu() {
+    const open = this.actionMenu.hidden;
+    this.actionMenu.hidden = !open;
+    this.actionMenuToggle.setAttribute('aria-expanded', String(open));
+  }
+
+  #closeActionMenu() {
+    if (!this.actionMenu) return;
+    this.actionMenu.hidden = true;
+    this.actionMenuToggle.setAttribute('aria-expanded', 'false');
   }
 
   #paintState() {

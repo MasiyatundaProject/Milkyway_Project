@@ -43,6 +43,7 @@ const icons = {
   hangup: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .4-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85a1 1 0 0 1-1.41-.02L.29 13.08a1 1 0 0 1 0-1.41A16.9 16.9 0 0 1 12 7c4.5 0 8.6 1.76 11.7 4.67a1 1 0 0 1 0 1.41l-2.48 2.47a1 1 0 0 1-1.41.02 11.3 11.3 0 0 0-2.67-1.85 1 1 0 0 1-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>',
   micOff: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23A6.9 6.9 0 0 0 19 11zm-4.02.17V5a3 3 0 0 0-5.96-.59l5.96 5.96v.8zM4.27 3 3 4.27l6.01 6.01V11a3 3 0 0 0 4.29 2.71l1.66 1.66A5 5 0 0 1 7 11H5.3a6.9 6.9 0 0 0 5.7 6.72V21h2v-3.28c.9-.13 1.75-.44 2.5-.88L19.73 21 21 19.73 4.27 3z"/></svg>',
   camOff: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 6.5l-4 4V7a1 1 0 0 0-1-1H9.82L21 17.18V6.5zM3.27 2 2 3.27 4.73 6H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12c.21 0 .39-.08.55-.18L19.73 21 21 19.73 3.27 2z"/></svg>',
+  more: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7" fill="currentColor"/><circle cx="12" cy="12" r="1.7" fill="currentColor"/><circle cx="19" cy="12" r="1.7" fill="currentColor"/></svg>',
 };
 
 class CallScreen {
@@ -145,14 +146,29 @@ class CallScreen {
     this.audioBox = h('div', { hidden: true });
     const button = (label, html, onclick, extra = '') => h('button', { class: `call-btn ${extra}`, type: 'button', 'aria-label': label, title: label, html, onclick });
     this.micBtn = button(t('microphone'), icon.mic, () => this.#toggleMic());
+    this.micBtn.setAttribute('aria-pressed', 'false');
+    this.micBtn.setAttribute('aria-label', t('muteMyMic'));
+    this.micBtn.title = t('muteMyMic');
     this.camBtn = button(t('camera'), icon.camera, () => this.#toggleCam());
     this.flipBtn = button(t('flipCamera'), icon.flip, () => this.#flip());
+    this.audioSinkId = '';
+    this.audioOutputDevices = [];
+    this.audioRouteBtn = button(t('audioOutput'), icon.sound, () => this.#cycleAudioOutput());
+    this.moreBtn = button(t('moreCallOptions'), icons.more, () => this.#toggleOptions());
+    this.moreBtn.setAttribute('aria-haspopup', 'true');
+    this.moreBtn.setAttribute('aria-expanded', 'false');
+    this.audioOutputList = h('div', { class: 'call-audio-outputs' });
+    this.optionsMenu = h('div', { class: 'call-options', role: 'group', 'aria-label': t('moreCallOptions'), hidden: true },
+      h('b', { class: 'call-options-title' }, t('audioOutput')),
+      this.audioOutputList);
     this.endBtn = button(t('endCall'), icons.hangup, () => this.hangUp(this.connectedAt ? 'ended' : 'cancelled'), 'end');
     if (this.mode !== 'video') { this.camBtn.hidden = true; this.flipBtn.hidden = true; }
+    this.flipBtn.classList.add('call-flip-btn');
     this.#syncCameraButton();
     this.camBtn.disabled = true;
     this.flipBtn.disabled = true;
-    this.controls = h('div', { class: 'call-controls' }, this.micBtn, this.camBtn, this.flipBtn, this.endBtn);
+    this.controls = h('div', { class: 'call-controls' },
+      this.optionsMenu, this.moreBtn, this.audioRouteBtn, this.camBtn, this.flipBtn, this.micBtn, this.endBtn);
     this.answer = h('div', { class: 'call-answer' },
       h('button', { class: 'call-btn end', type: 'button', 'aria-label': t('decline'), html: icons.hangup, onclick: () => this.#decline() }),
       h('button', { class: 'call-btn accept', type: 'button', 'aria-label': t('accept'), html: this.mode === 'video' ? icon.camera : icons.phone, onclick: () => this.#accept() }));
@@ -356,6 +372,9 @@ class CallScreen {
     if (track.kind === Track.Kind.Audio) {
       const element = track.attach();
       this.audioBox.append(element);
+      if (this.audioSinkId && typeof element.setSinkId === 'function') {
+        element.setSinkId(this.audioSinkId).catch(error => console.warn('[call] selected audio output could not be applied', error));
+      }
       element.play().then(() => { if (!this.closed) this.playAudioBtn.hidden = true; })
         .catch(() => { if (!this.closed) this.playAudioBtn.hidden = false; });
       return;
@@ -377,6 +396,88 @@ class CallScreen {
       await Promise.all([...this.audioBox.querySelectorAll('audio')].map(element => element.play()));
       this.playAudioBtn.hidden = true;
     } catch (error) { toast(error?.message || t('callFailed')); }
+  }
+
+  async #cycleAudioOutput() {
+    if (typeof HTMLMediaElement === 'undefined' || typeof HTMLMediaElement.prototype.setSinkId !== 'function') {
+      toast(t('audioOutputUnavailable'));
+      return;
+    }
+    try {
+      const devices = await navigator.mediaDevices?.enumerateDevices?.() || [];
+      this.audioOutputDevices = devices.filter(device => device.kind === 'audiooutput');
+      const routes = [{ deviceId: '', label: t('defaultAudioOutput') }, ...this.audioOutputDevices.map((device, index) => ({
+        deviceId: device.deviceId,
+        label: device.label || t('audioOutputDevice').replace('{number}', String(index + 1)),
+      }))];
+      const current = routes.findIndex(route => route.deviceId === this.audioSinkId);
+      const next = routes[(current + 1) % routes.length];
+      await this.#setAudioOutput(next.deviceId, next.label);
+      toast(next.label);
+    } catch (error) {
+      console.warn('[call] audio output selection failed', error);
+      toast(error?.message || t('audioOutputUnavailable'));
+    }
+  }
+
+  async #toggleOptions() {
+    const open = this.optionsMenu.hidden;
+    this.optionsMenu.hidden = !open;
+    this.moreBtn.setAttribute('aria-expanded', String(open));
+    if (!open) return;
+    this.audioOutputList.replaceChildren();
+    if (typeof HTMLMediaElement === 'undefined' || typeof HTMLMediaElement.prototype.setSinkId !== 'function') {
+      this.audioOutputList.append(h('p', { class: 'call-options-hint' }, t('audioOutputUnavailable')));
+      return;
+    }
+    this.audioOutputList.append(this.#audioOutputOption('', t('defaultAudioOutput')));
+    try {
+      const devices = await navigator.mediaDevices?.enumerateDevices?.() || [];
+      this.audioOutputDevices = devices.filter(device => device.kind === 'audiooutput');
+      this.audioOutputDevices.forEach((device, index) => {
+        this.audioOutputList.append(this.#audioOutputOption(
+          device.deviceId,
+          device.label || t('audioOutputDevice').replace('{number}', String(index + 1)),
+        ));
+      });
+    } catch (error) {
+      console.warn('[call] audio output devices could not be listed', error);
+      this.audioOutputList.append(h('p', { class: 'call-options-hint' }, error?.message || t('audioOutputUnavailable')));
+    }
+  }
+
+  #audioOutputOption(deviceId, label) {
+    return h('button', {
+      class: 'call-option',
+      type: 'button',
+      'data-device-id': deviceId,
+      'aria-pressed': String(this.audioSinkId === deviceId),
+      onclick: async () => {
+        try {
+          await this.#setAudioOutput(deviceId, label);
+          this.optionsMenu.hidden = true;
+          this.moreBtn.setAttribute('aria-expanded', 'false');
+        } catch (error) {
+          console.warn('[call] audio output selection failed', error);
+          toast(error?.message || t('audioOutputUnavailable'));
+        }
+      },
+    }, label);
+  }
+
+  async #setAudioOutput(deviceId, label = '') {
+    if (typeof HTMLMediaElement === 'undefined' || typeof HTMLMediaElement.prototype.setSinkId !== 'function') {
+      throw new Error(t('audioOutputUnavailable'));
+    }
+    const elements = [...this.audioBox.querySelectorAll('audio')];
+    await Promise.all(elements.map(element => element.setSinkId(deviceId)));
+    this.audioSinkId = deviceId;
+    const outputLabel = label || t('defaultAudioOutput');
+    this.audioRouteBtn.setAttribute('aria-label', `${t('audioOutput')}: ${outputLabel}`);
+    this.audioRouteBtn.title = `${t('audioOutput')}: ${outputLabel}`;
+    this.audioOutputList.querySelectorAll('.call-option').forEach(option => {
+      option.setAttribute('aria-pressed', String(option.dataset.deviceId === deviceId));
+    });
   }
 
   async #enableRingtone() {
@@ -442,6 +543,9 @@ class CallScreen {
     this.micOn = enabled;
     this.micBtn.classList.toggle('off', !this.micOn);
     this.micBtn.innerHTML = this.micOn ? icon.mic : icons.micOff;
+    this.micBtn.setAttribute('aria-pressed', String(!this.micOn));
+    this.micBtn.setAttribute('aria-label', this.micOn ? t('muteMyMic') : t('unmuteMyMic'));
+    this.micBtn.title = this.micOn ? t('muteMyMic') : t('unmuteMyMic');
   }
 
   async #toggleCam() {
